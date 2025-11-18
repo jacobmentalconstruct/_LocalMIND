@@ -1,0 +1,5 @@
+{
+  "name": "LocalMind - Ollama RAG Chat",
+  "description": "A streamlined local application to interface with an Ollama-run GGUF model. It features a basic RAG system for conversation retention, utilizing short-term (session) and long-term (localStorage) memory.",
+  "requestFramePermissions": []
+}
