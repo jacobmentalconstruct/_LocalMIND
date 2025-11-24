@@ -77,3 +77,25 @@ export const BotIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
         <path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>
     </svg>
 );
+
+export const PencilIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+<path d="m15 5 4 4"/>
+</svg>
+);
+
+export const CheckIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+<polyline points="20 6 9 17 4 12"/>
+</svg>
+);
+
+export const XIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+<path d="M18 6 6 18"/>
+<path d="m6 6 18 18"/>
+</svg>
+);
+
+
