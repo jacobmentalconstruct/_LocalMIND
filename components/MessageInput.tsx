@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { EraserIcon, SendIcon, SquareIcon } from './icons';
 
@@ -6,8 +5,6 @@ interface MessageInputProps {
   onSendMessage: (input: string) => void;
   isLoading: boolean;
   onStop: () => void;
-  useLongTermMemory: boolean;
-  onToggleMemory: () => void;
   onClearChat: () => void;
 }
 
@@ -15,8 +12,6 @@ const MessageInput: React.FC<MessageInputProps> = ({
   onSendMessage, 
   isLoading, 
   onStop, 
-  useLongTermMemory, 
-  onToggleMemory,
   onClearChat
 }) => {
   const [input, setInput] = useState('');
@@ -67,7 +62,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
                 <SquareIcon className="w-5 h-5"/>
                 </button>
             ) : (
-                <button
+              <button
                 type="submit"
                 className="p-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-gray-500 transition-colors"
                 disabled={!input.trim()}
@@ -77,16 +72,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
             )}
         </div>
       </form>
-       <div className="flex items-center justify-between text-xs text-gray-400">
-        <button
-          onClick={onToggleMemory}
-          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-700"
-        >
-          <div className={`w-4 h-4 border-2 rounded-sm flex items-center justify-center ${useLongTermMemory ? 'bg-indigo-500 border-indigo-400' : 'border-gray-500'}`}>
-            {useLongTermMemory && <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" /></svg>}
-          </div>
-          <span>Use Long-Term Memory</span>
-        </button>
+       <div className="flex items-center justify-end text-xs text-gray-400">
         <button
           onClick={onClearChat}
           className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-700"
