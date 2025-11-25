@@ -420,13 +420,20 @@ async def chat_endpoint(request: ChatRequest):
         try:
             summarizer_model = request.summarizer_model or get_best_summarizer()
             summary_prompt = f"""
-            Analyze this interaction and extract only the useful facts or context to remember.
-            Ignore pleasantries. If nothing is worth remembering, reply with "NO_DATA".
+            You are a Knowledge Graph extraction tool.
+            Analyze the following interaction.
             
-            User: {request.message}
+            Extract ONLY permanent facts about the user, the project, or the world.
+            - DO NOT summarize the conversation flow (e.g. "User asked for help").
+            - DO NOT record transient debugging steps.
+            - ONLY record facts like "User is building a React app" or "Project uses SQLite".
+            
+            If there are no new PERMANENT facts, reply exactly with "NO_DATA".
+            
+            User: {request.original_message}
             AI: {assistant_response}
             
-            Summary:
+            Fact:
             """
             
             summary_res = ollama.chat(model=summarizer_model, messages=[{'role': 'user', 'content': summary_prompt}])
@@ -504,6 +511,71 @@ def get_history():
     except Exception as e:
         logger.error(f"Error fetching history: {e}")
         return {"history": []}
+
+# Add this to backend/server.py
+@app.get("/session_summary")
+def get_session_summary_endpoint():
+    try:
+        # We need to instantiate the manager
+        from backend.session_manager import SessionManager
+        mgr = SessionManager()
+        summary = mgr.get_session_summary("default_session")
+        return {"summary": summary}
+    except Exception as e:
+        logger.error(f"Error fetching session summary: {e}")
+        return {"summary": ""}
+
+# Endpoint to fetch raw ingredients
+@app.post("/get_prompt_context")
+async def get_prompt_context_endpoint(request: BuildPromptRequest):
+    try:
+        # 1. RAG & Memory
+        rag_context = ""
+        memories = []
+        if request.use_memory:
+            embedding_response = ollama.embeddings(model='mxbai-embed-large', prompt=request.message)
+            results = collection.query(query_embeddings=[embedding_response['embedding']], n_results=5)
+            if results['documents']:
+                rag_context = "\n".join([doc for doc in results['documents'][0]])[:12000]
+            
+            # Fetch LTM
+            mem_results = collection.get(limit=10)
+            if mem_results['documents']:
+                for doc in mem_results['documents']:
+                    memories.append({"content": doc})
+
+        # 2. History (From SQLite)
+        history = []
+        conn = get_db_connection()
+        rows = conn.execute("SELECT role, content FROM chats ORDER BY timestamp DESC LIMIT 20").fetchall()
+        conn.close()
+        if rows:
+            for row in reversed(rows):
+                history.append({'role': row['role'], 'content': row['content']})
+
+        return {
+            "rag_context": rag_context,
+            "memories": memories,
+            "history": history
+        }
+    except Exception as e:
+        logger.error(f"Error fetching context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoint to Render only
+class RenderRequest(BaseModel):
+    schema_data: dict # Pass the full schema to render
+
+@app.post("/render_prompt")
+async def render_prompt_endpoint(request: RenderRequest):
+    try:
+        # We use the orchestrator to render the final string from the schema
+        final_prompt = orchestrator.render_final_prompt(request.schema_data)
+        return {"final_prompt": final_prompt}
+    except Exception as e:
+        logger.error(f"Error rendering prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn

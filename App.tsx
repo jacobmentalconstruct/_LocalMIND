@@ -16,14 +16,14 @@ const App: React.FC = () => {
   const [model, setModel] = useState('llama3');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
-  // Removed useMemory state
+  
   const [activeSummarizer, setActiveSummarizer] = useState('');
   const [availableSummarizers, setAvailableSummarizers] = useState<string[]>([]);
   const [missingSummarizers, setMissingSummarizers] = useState<string[]>([]);
 
   // Inspector State
-  const [showInspector, setShowInspector] = useState(false);
-  const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [showInspector, setShowInspector] = useState(false); // Toggles the 3rd column
+  const [isBuildingPrompt, setIsBuildingPrompt] = useState(false); // [NEW] Loading state for orchestrator
   const [inspectedPrompt, setInspectedPrompt] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
   
@@ -60,34 +60,37 @@ const App: React.FC = () => {
       // Load Memories (The "Important Notes")
       getMemories().then(mems => setLongTermMemory(mems));
 
-      // (Optional) Load chat history if you still want context, 
-      // but the RAG is now doing the heavy lifting.
+      // Load chat history
       getHistory().then(history => {
           if (history.length > 0) setMessages(history as any); 
       });
   }, [checkOllamaStatus]);
   
   const handleSendMessage = async (input: string) => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || isBuildingPrompt) return;
 
-    // If Inspector is enabled, we intercept the send
-    if (showInspector) {
-        try {
-            setIsLoading(true);
-            const buildResult = await buildPrompt(model, input, systemPrompt, true);
-            setInspectedPrompt(buildResult.final_prompt);
-            setPendingUserMessage(input);
-            setInspectorVisible(true);
-        } catch(e) {
-            alert("Failed to build prompt");
-        } finally {
-            setIsLoading(false);
-        }
+    // 1. If Inspector is CLOSED, just run (Legacy mode)
+    if (!showInspector) {
+        await runInference(input, null);
         return;
-    } 
-             
-    // Standard flow (legacy or direct) 
-    await runInference(input, null);
+    }
+
+    // 2. If Inspector is OPEN, start the "Orchestration Build"
+    setIsBuildingPrompt(true);
+    setPendingUserMessage(input);
+    
+    // UI Feedback: Show that we are working
+    setInspectedPrompt(`=== ORCHESTRATION IN PROGRESS ===\n\n> Querying Vector Database (RAG)...\n> Fetching Session History...\n> Compiling Memory Context...\n> Applying System Templates...\n\n(Please Wait)`);
+
+    try {
+        // Fetch the fully constructed prompt from the backend
+        const buildResult = await buildPrompt(model, input, systemPrompt, true);
+        setInspectedPrompt(buildResult.final_prompt);
+    } catch(e) {
+        setInspectedPrompt(`Error building prompt: ${String(e)}`);
+    } finally {
+        setIsBuildingPrompt(false); // Unlock the UI
+    }
   };
 
   const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
@@ -105,10 +108,10 @@ const App: React.FC = () => {
     try {
         let data;
         if (overriddenPrompt) {
-             // Use new Inference Endpoint
+             // Use new Inference Endpoint (Inspector Flow)
              data = await inferWithPrompt(overriddenPrompt, model, originalInput, activeSummarizer);
         } else {
-             // Use Legacy Endpoint
+             // Use Standard Endpoint (Direct Flow)
              data = await sendChat(model, originalInput, systemPrompt, true, activeSummarizer);
         }
         
@@ -126,7 +129,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
-      setInspectorVisible(false); // Close inspector if open
+      // We do NOT close the inspector automatically in persistent mode
     }
   };
 
@@ -173,7 +176,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen font-sans bg-gray-900 text-gray-100">
+    <div className="flex h-screen font-sans bg-gray-900 text-gray-100 overflow-hidden">
       <MemoryPanel 
         memoryItems={longTermMemory} 
         onDelete={handleDeleteFromMemory}
@@ -182,7 +185,7 @@ const App: React.FC = () => {
       />
       
       {/* Main Content Column */}
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 border-r border-gray-700">
         <header className="flex flex-col p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm gap-4">
           {/* Top Row: Logo, Indicators, Main Controls */}
             <div className="flex items-center justify-between">
@@ -211,7 +214,7 @@ const App: React.FC = () => {
                         </select>
                     </div>
             
-                    {/* Summarizer Selector (Constrained) */}
+                    {/* Summarizer Selector */}
                     <div className="flex flex-col items-end">
                         <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Summarizer</span>
                         <select
@@ -233,7 +236,7 @@ const App: React.FC = () => {
         
             {/* Inspector Toggle */}
             <div className="flex justify-end pr-1">
-                <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none hover:text-white transition-colors">
                 <input 
                     type="checkbox" 
                     checked={showInspector} 
@@ -244,7 +247,7 @@ const App: React.FC = () => {
                 </label>
             </div>
                     
-            {/* Middle Row: System Prompt & Warnings */}
+            {/* Middle Row: System Prompt */}
             <div className="flex gap-4">
                 <div className="flex-1">
                     <SystemPromptControl 
@@ -253,7 +256,7 @@ const App: React.FC = () => {
                     />
                 </div>
                     
-                {/* Missing Models Warning Note */}
+                {/* Missing Models Warning */}
                 {missingSummarizers.length > 0 && (
                     <div className="w-1/3 text-[10px] text-orange-400 bg-orange-900/20 p-2 rounded border border-orange-900/50 overflow-y-auto h-16">
                         <strong>Missing Preferred Models:</strong>
@@ -274,21 +277,22 @@ const App: React.FC = () => {
         <footer className="p-4 border-t border-gray-700 bg-gray-800/50">
           <MessageInput 
             onSendMessage={handleSendMessage} 
-            isLoading={isLoading}
+            isLoading={isLoading || isBuildingPrompt}
             onStop={handleStopGeneration}
             onClearChat={handleClearChat}
           />
         </footer>
       </div>
 
-      {/* Inspector Column (Right Side) */}
-      {inspectorVisible && ( 
+      {/* Persistent Inspector Column */}
+      {showInspector && ( 
         <PromptInspector 
             promptText={inspectedPrompt}
             onPromptChange={setInspectedPrompt}
-            onCancel={() => setInspectorVisible(false)}
+            onCancel={() => setShowInspector(false)}
             onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
             model={model}
+            isBuilding={isBuildingPrompt}
         />
       )}
     </div>

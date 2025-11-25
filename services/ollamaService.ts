@@ -49,6 +49,18 @@ export const getSummarizerStatus = async (): Promise<{available: string[], missi
     }
 };
 
+// services/ollamaService.ts
+export const getSessionSummary = async (): Promise<string> => {
+    try {
+        const response = await fetch(`${API_URL}/session_summary`);
+        const data = await response.json();
+        return data.summary;
+    } catch (error) {
+        console.error("Failed to fetch session summary:", error);
+        return "";
+    }
+};
+
 export const buildPrompt = async (model: string, message: string, system_prompt: string, use_memory: boolean) => {
 const response = await fetch(`${API_URL}/build_prompt`, {
 method: 'POST',
@@ -129,5 +141,21 @@ export const getHistory = async (): Promise<OllamaMessage[]> => {
   }
 };
 
+export const getPromptContext = async (model: string, message: string, system_prompt: string, use_memory: boolean) => {
+    const response = await fetch(`${API_URL}/get_prompt_context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, message, system_prompt, use_memory })
+    });
+    return await response.json();
+};
 
+export const renderPrompt = async (schema_data: any) => {
+    const response = await fetch(`${API_URL}/render_prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schema_data })
+    });
+    return await response.json();
+};
 
