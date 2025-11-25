@@ -49,6 +49,33 @@ export const getSummarizerStatus = async (): Promise<{available: string[], missi
     }
 };
 
+export const buildPrompt = async (model: string, message: string, system_prompt: string, use_memory: boolean) => {
+const response = await fetch(`${API_URL}/build_prompt`, {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ model, message, system_prompt, use_memory })
+});
+return await response.json();
+};
+
+export const inferWithPrompt = async (final_prompt: string, model: string, original_message: string, summarizer_model: string) => {
+const response = await fetch(`${API_URL}/infer_with_prompt`, {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ final_prompt, model, original_message, summarizer_model })
+});
+return await response.json();
+};
+
+export const analyzeSnippet = async (snippet: string, instructions: string, model: string) => {
+const response = await fetch(`${API_URL}/analyze_snippet`, {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({ snippet, instructions, model })
+});
+return await response.json();
+};
+
 export const sendChat = async (model: string, message: string, system_prompt: string, use_memory: boolean, summarizer_model: string) => {
     try {
       const response = await fetch(`${API_URL}/chat`, {
@@ -101,4 +128,6 @@ export const getHistory = async (): Promise<OllamaMessage[]> => {
     return [];
   }
 };
+
+
 

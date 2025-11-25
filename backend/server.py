@@ -8,6 +8,11 @@ from pydantic import BaseModel
 import chromadb
 import ollama
 
+# [NEW] Orchestration Modules
+import backend.profiles as profiles
+from backend.orchestrator import Orchestrator
+from backend.database import init_db, get_db_connection # Added get_db_connection
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,7 +31,6 @@ def check_and_pull_models():
         response = ollama.list()
         model_list = []
         
-        # [FIX] Corrected Indentation Block
         if isinstance(response, dict) and 'models' in response:
             model_list = response['models']
         elif isinstance(response, list):
@@ -36,7 +40,6 @@ def check_and_pull_models():
         
         installed = []
         for m in model_list:
-            # Try 'name' then 'model', handling both dicts and objects
             name = m.get('name') if isinstance(m, dict) else getattr(m, 'name', None)
             if not name:
                 name = m.get('model') if isinstance(m, dict) else getattr(m, 'model', None)
@@ -57,8 +60,12 @@ def check_and_pull_models():
 
 # Call this immediately when script loads
 check_and_pull_models()
+init_db() # Initialize SQLite
 
 app = FastAPI()
+
+# Initialize Orchestrator
+orchestrator = Orchestrator(profiles)
 
 # DEFINE YOUR TRUSTED SUMMARIZERS HERE (Smallest to Largest)
 PREFERRED_SUMMARIZERS = [
@@ -128,6 +135,23 @@ class ChatRequest(BaseModel):
 class UpdateMemoryRequest(BaseModel):
     content: str
 
+class BuildPromptRequest(BaseModel):
+    message: str
+    model: str
+    system_prompt: str
+    use_memory: bool = True
+
+class InferenceRequest(BaseModel):
+    final_prompt: str
+    model: str
+    original_message: str # Needed for sidecar summary
+    summarizer_model: str | None = None
+
+class SnippetRequest(BaseModel):
+    snippet: str
+    instructions: str
+    model: str
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"Validation Error: {exc.errors()}")
@@ -180,6 +204,134 @@ def get_summarizer_status():
         logger.error(f"Error getting summarizers: {e}")
         return {"available": [], "missing": []}
 
+@app.post("/build_prompt")
+async def build_prompt_endpoint(request: BuildPromptRequest):
+    try:
+        # 1. RAG & Memory Lookup
+        rag_context = ""
+        memories = []
+        
+        if request.use_memory:
+            # Fetch RAG
+            embedding_response = ollama.embeddings(model='mxbai-embed-large', prompt=request.message)
+            results = collection.query(query_embeddings=[embedding_response['embedding']], n_results=5)
+            if results['documents']:
+                rag_context = "\n".join([doc for doc in results['documents'][0]])[:12000]
+            
+            # Fetch All Memories (for the LTM block)
+            mem_results = collection.get(limit=10)
+            if mem_results['documents']:
+                for doc in mem_results['documents']:
+                    memories.append({"content": doc})
+
+        # 2. Get History (FROM SQLITE NOW)
+        history = []
+        conn = get_db_connection()
+        # Fetch last 20 messages, newest first, then reverse
+        rows = conn.execute("SELECT role, content FROM chats ORDER BY timestamp DESC LIMIT 20").fetchall()
+        conn.close()
+        
+        if rows:
+             # Reverse to get chronological order (Oldest -> Newest)
+            for row in reversed(rows):
+                history.append({'role': row['role'], 'content': row['content']})
+
+        # 3. Build Schema
+        schema = orchestrator.build_context_schema(
+            user_message=request.message,
+            model_name=request.model,
+            system_prompt_override=request.system_prompt,
+            memories=memories,
+            rag_context=rag_context,
+            history=history
+        )
+
+        # 4. Render
+        final_prompt = orchestrator.render_final_prompt(schema)
+        
+        return {
+            "final_prompt": final_prompt,
+            "meta": schema["meta"]
+        }
+    except Exception as e:
+        logger.error(f"Error building prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/infer_with_prompt")
+async def infer_with_prompt_endpoint(request: InferenceRequest):
+    try:
+        # [NEW] Save User's intent to "Tape of Truth" (Even if via Inspector)
+        conn = get_db_connection()
+        conn.execute(
+            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+            ("default_session", "user", request.original_message, request.model)
+        )
+        conn.commit()
+
+        # 1. Raw Inference using the constructed prompt
+        messages = [{'role': 'user', 'content': request.final_prompt}]
+        
+        response = ollama.chat(model=request.model, messages=messages)
+        assistant_response = response['message']['content']
+
+        # [NEW] Save Assistant's response to "Tape of Truth"
+        conn.execute(
+            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+            ("default_session", "assistant", assistant_response, request.model)
+        )
+        conn.commit()
+        conn.close()
+
+        # 2. Trigger Sidecar (The Curator)
+        summary_note = None
+        try:
+            summarizer_model = request.summarizer_model or get_best_summarizer()
+            summary_prompt = f"""
+            Analyze this interaction and extract only the useful facts or context to remember.
+            Ignore pleasantries. If nothing is worth remembering, reply with "NO_DATA".
+            
+            User: {request.original_message}
+            AI: {assistant_response}
+            
+            Summary:
+            """
+            summary_res = ollama.chat(model=summarizer_model, messages=[{'role': 'user', 'content': summary_prompt}])
+            summary_text = summary_res['message']['content'].strip()
+            
+            if summary_text and "NO_DATA" not in summary_text:
+                save_embed = ollama.embeddings(model='mxbai-embed-large', prompt=summary_text)
+                new_id = str(os.urandom(8).hex())
+                collection.add(ids=[new_id], embeddings=[save_embed['embedding']], documents=[summary_text])
+                summary_note = {'id': new_id, 'content': summary_text}
+        except Exception as e:
+            logger.error(f"Sidecar failed: {e}")
+
+        return {"response": assistant_response, "new_memory": summary_note}
+    except Exception as e:
+        logger.error(f"Inference failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analyze_snippet")
+async def analyze_snippet_endpoint(request: SnippetRequest):
+    try:
+        prompt = f"""SYSTEM: You are a utility assistant. Only use the snippet provided.
+
+SNIPPET:
+{request.snippet}
+
+INSTRUCTIONS:
+{request.instructions}
+
+RESPONSE:"""
+        
+        response = ollama.chat(model=request.model, messages=[{'role': 'user', 'content': prompt}])
+        return {"result": response['message']['content']}
+    except Exception as e:
+        logger.error(f"Snippet analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/memories/{memory_id}")
 def update_memory(memory_id: str, request: UpdateMemoryRequest):
     try:
@@ -219,7 +371,16 @@ async def chat_endpoint(request: ChatRequest):
     logger.info(f"Chat Request -> Model: '{request.model}'")
     
     try:
-        # 1. RETRIEVE CONTEXT (RAG)
+        conn = get_db_connection()
+        
+        # [NEW] 1. SAVE USER MSG TO SQLITE (The Rising Edge Input)
+        conn.execute(
+            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+            ("default_session", "user", request.message, request.model)
+        )
+        conn.commit()
+
+        # 2. RETRIEVE CONTEXT (RAG)
         context_str = ""
         if request.use_memory:
             embedding_response = ollama.embeddings(model='mxbai-embed-large', prompt=request.message)
@@ -231,12 +392,10 @@ async def chat_endpoint(request: ChatRequest):
             )
             
             if results['documents']:
-                # The context is a list of past summaries
                 raw_context = "\n".join([doc for doc in results['documents'][0]])
-                # [FIX] Truncate to ~3000 tokens (approx 12k chars) to prevent crash
                 context_str = raw_context[:12000]
         
-        # 2. PREPARE PROMPT FOR MAIN MODEL
+        # 3. PREPARE PROMPT FOR MAIN MODEL
         full_system_prompt = f"{request.system_prompt}\n\nRELEVANT MEMORIES:\n{context_str}"
         
         messages = [
@@ -244,17 +403,22 @@ async def chat_endpoint(request: ChatRequest):
             {'role': 'user', 'content': request.message}
         ]
 
-        # 3. MAIN MODEL GENERATION
+        # 4. MAIN MODEL GENERATION
         response = ollama.chat(model=request.model, messages=messages)
         assistant_response = response['message']['content']
 
-        # 4. SYNCHRONOUS "SIDECAR" SUMMARY
+        # [NEW] 5. SAVE ASSISTANT MSG TO SQLITE (The Rising Edge Output)
+        conn.execute(
+            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+            ("default_session", "assistant", assistant_response, request.model)
+        )
+        conn.commit()
+        conn.close()
+
+        # 6. SYNCHRONOUS "SIDECAR" SUMMARY
         summary_note = None
         try:
-            # DYNAMICALLY GET THE MODEL NAME
-            # Use client choice if provided, otherwise auto-select
             summarizer_model = request.summarizer_model or get_best_summarizer()
-            
             summary_prompt = f"""
             Analyze this interaction and extract only the useful facts or context to remember.
             Ignore pleasantries. If nothing is worth remembering, reply with "NO_DATA".
@@ -265,23 +429,28 @@ async def chat_endpoint(request: ChatRequest):
             Summary:
             """
             
-            # Fast inference with tiny model
             summary_res = ollama.chat(model=summarizer_model, messages=[{'role': 'user', 'content': summary_prompt}])
             summary_text = summary_res['message']['content'].strip()
 
             if summary_text and "NO_DATA" not in summary_text:
-                # Save to RAG
                 save_embed = ollama.embeddings(model='mxbai-embed-large', prompt=summary_text)
                 new_id = str(os.urandom(8).hex())
                 collection.add(ids=[new_id], embeddings=[save_embed['embedding']], documents=[summary_text])
-                
-                # Prepare to send back to UI
                 summary_note = {'id': new_id, 'content': summary_text}
                 
         except Exception as e:
             logger.error(f"Summary failed: {e}")
 
-        # Return BOTH the reply and the new note
+        # 7. TRIGGER SESSION COMPACTOR (Fire and Forget)
+        try: 
+            # [FIX] Correct indentation here
+            orchestrator.session_manager.check_and_compact(
+                session_id="default_session",
+                model_name=request.summarizer_model or "qwen2.5:0.5b-instruct"
+            ) 
+        except Exception as e:
+            logger.error(f"Compaction trigger failed: {e}")
+        
         return {
             "response": assistant_response, 
             "new_memory": summary_note 
@@ -319,20 +488,17 @@ def get_models():
 
 @app.get("/history")
 def get_history():
-    """Fetch recent chat history from ChromaDB"""
+    """Fetch recent chat history from SQLite (Tape of Truth)"""
     try:
-        results = collection.get(limit=20)
+        conn = get_db_connection()
+        # Fetch last 20 messages, ordered by newest first
+        rows = conn.execute("SELECT role, content FROM chats ORDER BY timestamp DESC LIMIT 20").fetchall()
+        conn.close()
+        
         history = []
-        if results['documents']:
-            for doc in results['documents']:
-                # Note: This parser might need adjustment if we stop saving "User: ... Assistant: ..." format
-                # But for legacy data it will work.
-                parts = doc.split("\nAssistant: ")
-                if len(parts) == 2:
-                    user_msg = parts[0].replace("User: ", "")
-                    ai_msg = parts[1]
-                    history.append({'role': 'user', 'content': user_msg})
-                    history.append({'role': 'assistant', 'content': ai_msg})
+        # Reverse them to return in chronological order (Oldest -> Newest)
+        for row in reversed(rows):
+            history.append({'role': row['role'], 'content': row['content']})
         
         return {"history": history}
     except Exception as e:
@@ -342,3 +508,4 @@ def get_history():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

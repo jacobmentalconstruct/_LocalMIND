@@ -16,3 +16,10 @@ export interface OllamaMessage {
     role: 'user' | 'assistant';
     content: string;
 }
+
+export interface BuildPromptResult {
+final_prompt: string;
+meta: any;
+}
+
+

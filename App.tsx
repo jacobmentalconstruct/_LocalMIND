@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatMessage, MemoryItem, OllamaStatus } from './types';
-import { checkStatus, sendChat, getModels, getHistory, getMemories, getSummarizerStatus, updateMemory } from './services/ollamaService';
+import { checkStatus, sendChat, getModels, getHistory, getMemories, getSummarizerStatus, updateMemory, buildPrompt, inferWithPrompt } from './services/ollamaService';
 import MemoryPanel from './components/MemoryPanel';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
 import SystemPromptControl from './components/SystemPromptControl';
+import PromptInspector from './components/PromptInspector';
 import { BrainCircuitIcon, CircleDotIcon, PowerIcon, PowerOffIcon } from './components/icons';
 
 const App: React.FC = () => {
@@ -20,6 +21,12 @@ const App: React.FC = () => {
   const [availableSummarizers, setAvailableSummarizers] = useState<string[]>([]);
   const [missingSummarizers, setMissingSummarizers] = useState<string[]>([]);
 
+  // Inspector State
+  const [showInspector, setShowInspector] = useState(false);
+  const [inspectorVisible, setInspectorVisible] = useState(false);
+  const [inspectedPrompt, setInspectedPrompt] = useState('');
+  const [pendingUserMessage, setPendingUserMessage] = useState('');
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const checkOllamaStatus = useCallback(async () => {
@@ -63,40 +70,63 @@ const App: React.FC = () => {
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading) return;
 
+    // If Inspector is enabled, we intercept the send
+    if (showInspector) {
+        try {
+            setIsLoading(true);
+            const buildResult = await buildPrompt(model, input, systemPrompt, true);
+            setInspectedPrompt(buildResult.final_prompt);
+            setPendingUserMessage(input);
+            setInspectorVisible(true);
+        } catch(e) {
+            alert("Failed to build prompt");
+        } finally {
+            setIsLoading(false);
+        }
+        return;
+    } 
+             
+    // Standard flow (legacy or direct) 
+    await runInference(input, null);
+  };
+
+  const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
     setIsLoading(true);
-    const userMessage: ChatMessage = { id: Date.now().toString(), role: 'user', content: input };
-    setMessages(prev => [...prev, userMessage]);
-
-    abortControllerRef.current = new AbortController();
+    // UI Updates
+    if (!messages.find(m => m.content === originalInput)) {
+         const userMessage: ChatMessage = { id: Date.now().toString(), role: 'user', content: originalInput };
+         setMessages(prev => [...prev, userMessage]);
+    } 
+           
+    abortControllerRef.current = new AbortController(); 
     const assistantMessageId = (Date.now() + 1).toString();
-    
     setMessages(prev => [...prev, { id: assistantMessageId, role: 'assistant', content: '' }]);
-
+    
     try {
-        // We pass true for memory (always active) AND activeSummarizer
-        const data = await sendChat(model, input, systemPrompt, true, activeSummarizer);
+        let data;
+        if (overriddenPrompt) {
+             // Use new Inference Endpoint
+             data = await inferWithPrompt(overriddenPrompt, model, originalInput, activeSummarizer);
+        } else {
+             // Use Legacy Endpoint
+             data = await sendChat(model, originalInput, systemPrompt, true, activeSummarizer);
+        }
         
-        // Update Chat Window
         setMessages(prev => prev.map(msg => 
-            msg.id === assistantMessageId 
-            ? { ...msg, content: data.response } 
-            : msg
+            msg.id === assistantMessageId ? { ...msg, content: data.response } : msg
         ));
 
-        // Update "Important Notes" Panel immediately
         if (data.new_memory) {
             setLongTermMemory(prev => [data.new_memory, ...prev]);
         }
-
     } catch (error) {
          setMessages(prev => prev.map(msg => 
-          msg.id === assistantMessageId 
-            ? { ...msg, content: 'Sorry, I encountered an error. Please ensure the backend server is running.' } 
-            : msg
+          msg.id === assistantMessageId ? { ...msg, content: 'Error during inference.' } : msg
         ));
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
+      setInspectorVisible(false); // Close inspector if open
     }
   };
 
@@ -150,7 +180,9 @@ const App: React.FC = () => {
         onUpdate={handleUpdateMemory}
         onClear={() => setLongTermMemory([])}
       />
-      <div className="flex flex-col flex-1">
+      
+      {/* Main Content Column */}
+      <div className="flex flex-col flex-1 min-w-0">
         <header className="flex flex-col p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm gap-4">
           {/* Top Row: Logo, Indicators, Main Controls */}
             <div className="flex items-center justify-between">
@@ -199,16 +231,29 @@ const App: React.FC = () => {
                 </div>
             </div>
         
+            {/* Inspector Toggle */}
+            <div className="flex justify-end pr-1">
+                <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                <input 
+                    type="checkbox" 
+                    checked={showInspector} 
+                    onChange={e => setShowInspector(e.target.checked)} 
+                    className="accent-indigo-500"
+                />
+                Enable Prompt Inspector
+                </label>
+            </div>
+                    
             {/* Middle Row: System Prompt & Warnings */}
             <div className="flex gap-4">
                 <div className="flex-1">
                     <SystemPromptControl 
                         currentPrompt={systemPrompt}
                         onPromptChange={setSystemPrompt}
-                        />
-                        </div>
+                    />
+                </div>
                     
-                    {/* Missing Models Warning Note */}
+                {/* Missing Models Warning Note */}
                 {missingSummarizers.length > 0 && (
                     <div className="w-1/3 text-[10px] text-orange-400 bg-orange-900/20 p-2 rounded border border-orange-900/50 overflow-y-auto h-16">
                         <strong>Missing Preferred Models:</strong>
@@ -235,9 +280,19 @@ const App: React.FC = () => {
           />
         </footer>
       </div>
+
+      {/* Inspector Column (Right Side) */}
+      {inspectorVisible && ( 
+        <PromptInspector 
+            promptText={inspectedPrompt}
+            onPromptChange={setInspectedPrompt}
+            onCancel={() => setInspectorVisible(false)}
+            onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
+            model={model}
+        />
+      )}
     </div>
   );
 };
 
 export default App;
-
