@@ -37,10 +37,6 @@ const PromptInspector: React.FC<PromptInspectorProps> = ({ promptText, onPromptC
     };
 
     return (
-        {/* Use a fluid width instead of a fixed 500px so the inspector respects the
-           grid column sizing defined in `App.tsx`.  Removing `flex-shrink-0` also
-           lets the panel resize with the window instead of overlapping its
-           neighbours. */}
         <div className="flex flex-col h-full bg-gray-900 border-l border-gray-700 w-full overflow-hidden transition-all">
             <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
                 <h2 className="text-lg font-bold flex items-center gap-2">
@@ -122,4 +118,6 @@ const PromptInspector: React.FC<PromptInspectorProps> = ({ promptText, onPromptC
 };
 
 export default PromptInspector;
+
+
 
