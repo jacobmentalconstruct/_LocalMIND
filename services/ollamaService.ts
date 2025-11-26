@@ -159,3 +159,17 @@ export const renderPrompt = async (schema_data: any) => {
     return await response.json();
 };
 
+export const addMemory = async (content: string): Promise<MemoryItem | null> => {
+    try {
+        const response = await fetch(`${API_URL}/memories`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+        if (!response.ok) throw new Error("Failed to save memory");
+        return await response.json(); // Returns the new item with real ID
+    } catch (error) {
+        console.error("Error adding memory:", error);
+        return null;
+    }
+};

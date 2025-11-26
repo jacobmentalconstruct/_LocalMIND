@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ChatMessage, MemoryItem, OllamaStatus } from './types';
-import { checkStatus, sendChat, getModels, getHistory, getMemories, getSummarizerStatus, updateMemory, buildPrompt, inferWithPrompt } from './services/ollamaService';
+import { checkStatus, sendChat, getModels, getHistory, getMemories, getSummarizerStatus, updateMemory, addMemory, buildPrompt, inferWithPrompt } from './services/ollamaService';
 import MemoryPanel from './components/MemoryPanel';
+import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
 import SystemPromptControl from './components/SystemPromptControl';
@@ -21,8 +22,11 @@ const App: React.FC = () => {
   const [availableSummarizers, setAvailableSummarizers] = useState<string[]>([]);
   const [missingSummarizers, setMissingSummarizers] = useState<string[]>([]);
 
+  const [proposedFacts, setProposedFacts] = useState<MemoryItem[]>([]);
+  const [editingMemory, setEditingMemory] = useState<MemoryItem | null>(null);
+  
   // Inspector State
-  const [showInspector, setShowInspector] = useState(false); // Toggles the 3rd column
+  const [showInspector, setShowInspector] = useState(true); // Default to open based on mock
   const [isBuildingPrompt, setIsBuildingPrompt] = useState(false); // [NEW] Loading state for orchestrator
   const [inspectedPrompt, setInspectedPrompt] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
@@ -65,34 +69,43 @@ const App: React.FC = () => {
           if (history.length > 0) setMessages(history as any); 
       });
   }, [checkOllamaStatus]);
-  
+
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading || isBuildingPrompt) return;
 
-    // 1. If Inspector is CLOSED, just run (Legacy mode)
+    // 1. Legacy Mode
     if (!showInspector) {
         await runInference(input, null);
         return;
     }
 
-    // 2. If Inspector is OPEN, start the "Orchestration Build"
+    // 2. Inspector Mode - START THE BUILD
     setIsBuildingPrompt(true);
     setPendingUserMessage(input);
-    
-    // UI Feedback: Show that we are working
-    setInspectedPrompt(`=== ORCHESTRATION IN PROGRESS ===\n\n> Querying Vector Database (RAG)...\n> Fetching Session History...\n> Compiling Memory Context...\n> Applying System Templates...\n\n(Please Wait)`);
 
-    try {
-        // Fetch the fully constructed prompt from the backend
-        const buildResult = await buildPrompt(model, input, systemPrompt, true);
-        setInspectedPrompt(buildResult.final_prompt);
-    } catch(e) {
-        setInspectedPrompt(`Error building prompt: ${String(e)}`);
-    } finally {
-        setIsBuildingPrompt(false); // Unlock the UI
-    }
+    // [NEW] IMMEDIATE VISUAL SKELETON
+    // This matches your request: "Populate right away with the template"
+    setInspectedPrompt(`=== SYSTEM ===
+  ${systemPrompt}
+
+  === IDENTITY ===
+  User: (Loading Profile...)
+  Workspace: LocalMIND
+
+  === PREVIOUS SESSION CONTEXT ===
+  (Querying Session Manager...)
+
+  === LONG-TERM MEMORY (RAG) ===
+  (Querying Vector Database...)
+
+  === RECENT HISTORY ===
+  (Fetching SQLite Logs...)
+
+  === CURRENT MESSAGE ===
+  User: ${input}
+
+  Assistant:`);
   };
-
   const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
     setIsLoading(true);
     // UI Updates
@@ -120,7 +133,7 @@ const App: React.FC = () => {
         ));
 
         if (data.new_memory) {
-            setLongTermMemory(prev => [data.new_memory, ...prev]);
+            setProposedFacts(prev => [...prev, data.new_memory]);
         }
     } catch (error) {
          setMessages(prev => prev.map(msg => 
@@ -139,6 +152,22 @@ const App: React.FC = () => {
       abortControllerRef.current = null;
       setIsLoading(false);
     }
+  };
+  
+  const handleRefinerySave = async (content: string, id?: string) => {
+  if (id && !id.startsWith('temp_')) {
+  // Updating existing
+  await handleUpdateMemory(id, content);
+  } else {
+  // Creating new
+  const newMem = await addMemory(content);
+  if (newMem) {
+  setLongTermMemory(prev => [newMem, ...prev]);
+  // Remove from proposed if it was there
+  if (id) setProposedFacts(prev => prev.filter(p => p.id !== id));
+  }
+  }
+  setEditingMemory(null); // Close modal
   };
   
   const handleSaveToMemory = (content: string) => {
@@ -176,127 +205,104 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen font-sans bg-gray-900 text-gray-100 overflow-hidden">
-      <MemoryPanel 
-        memoryItems={longTermMemory} 
-        onDelete={handleDeleteFromMemory}
-        onUpdate={handleUpdateMemory}
-        onClear={() => setLongTermMemory([])}
-      />
-      
-      {/* Main Content Column */}
-      <div className="flex flex-col flex-1 min-w-0 border-r border-gray-700">
-        <header className="flex flex-col p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm gap-4">
-          {/* Top Row: Logo, Indicators, Main Controls */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <BrainCircuitIcon className="w-8 h-8 text-indigo-400" />
-                    <div>
-                        <h1 className="text-xl font-bold">LocalMind</h1>
-                        <p className="text-xs text-gray-400">Session Agent</p>
-                    </div>
-                </div> 
-               
-                <div className='flex items-center gap-4'>
-                    {/* Main Chat Model */}
-                    <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Chat Model</span>
-                        <select
+    <div className="h-screen bg-gray-900 text-gray-100 font-sans p-2 overflow-hidden">
+      {/* GRID LAYOUT 
+        Matches HTML mock: 260px | 1fr | 280px 
+        */}
+    {/* Add `min-h-0` so the grid and its children can shrink properly without
+       overflowing. Without this Tailwind utility the flex children (such as
+       the chat area) may grow beyond the viewport and cover other panels. */}
+    <div className="grid grid-cols-[260px_1fr_280px] gap-2 h-full min-h-0">
+        
+      {/* --- LEFT COLUMN: MEMORY PANEL --- */}
+      <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col">
+      <MemoryPanel
+      memoryItems={longTermMemory}
+      proposedItems={proposedFacts}
+      onDelete={handleDeleteFromMemory}
+      onClear={() => setLongTermMemory([])}
+        onEdit={(item) => setEditingMemory(item)}
+          onCreate={() => setEditingMemory({ id: 'temp_manual_create', content: '' })}
+            />
+                </div>
+                    
+                    {/* --- CENTER COLUMN: SYSTEM + CHAT --- */}
+                        {/* Allow the middle column to shrink vertically by adding `min-h-0`.  This fixes
+                           an issue where the chat panel would overlap the message input area. */}
+                        <div className="flex flex-col gap-2 min-w-0 min-h-0">
+                        
+                    {/* Top: System Prompt Control */}
+                <div className="h-[120px] bg-gray-800/50 border border-gray-700 rounded-lg p-3 flex flex-col gap-2 shadow-sm overflow-hidden"> 
+               <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                    <BrainCircuitIcon className="w-4 h-4" />
+                    System Instruction
+                        </span>
+                        {/* Model Selector Tucked Here */}
+                            <select
                             value={model}
                             onChange={e => setModel(e.target.value)}
-                            className="px-2 py-1 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300"
                         >
-                        {availableModels.length === 0 ? (
-                            <option value="loading">Loading...</option>
-                        ) : (
-                            availableModels.map(m => <option key={m} value={m}>{m}</option>)
-                        )} 
+                            {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
+                            </div>
+                        <div className="flex-1 min-h-0 overflow-y-auto"> 
+                        <SystemPromptControl
+                    currentPrompt={systemPrompt}
+            onPromptChange={setSystemPrompt}
+                    />
                     </div>
-            
-                    {/* Summarizer Selector */}
-                    <div className="flex flex-col items-end">
-                        <span className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Summarizer</span>
-                        <select
-                            value={activeSummarizer}
-                            onChange={e => setActiveSummarizer(e.target.value)}
-                            className="px-2 py-1 text-sm bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        >
-                            {availableSummarizers.length === 0 ? (
-                                <option value="none">No Preferred Models!</option> 
-                            ) : (
-                                availableSummarizers.map(m => <option key={m} value={m}>{m}</option>)
-                            )}
-                        </select>
+                        </div>
+                        
+                            {/* Bottom: Chat Window */}
+                            {/* Chat container now sets `min-h-0` to allow the message list to shrink and
+                               leaves room for the input box.  Without this the scroll area could
+                               overflow and sit on top of the input. */}
+                            <div className="flex-1 bg-gray-800/30 border border-gray-700 rounded-lg flex flex-col overflow-hidden relative min-h-0">
+                            <div className="flex-1 overflow-y-auto relative min-h-0">
+                        <ChatPanel messages={messages} onSaveToMemory={handleSaveToMemory} />
+                            </div>
+                                <div className="p-3 border-t border-gray-700 bg-gray-800/80"> 
+                            <MessageInput
+                                onSendMessage={handleSendMessage}
+                            isLoading={isLoading || isBuildingPrompt}
+                        onStop={handleStopGeneration}
+                    onClearChat={handleClearChat}
+          />
                     </div>
-          
-                    {getStatusIndicator()}
                 </div>
             </div>
         
-            {/* Inspector Toggle */}
-            <div className="flex justify-end pr-1">
-                <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none hover:text-white transition-colors">
-                <input 
-                    type="checkbox" 
-                    checked={showInspector} 
-                    onChange={e => setShowInspector(e.target.checked)} 
-                    className="accent-indigo-500"
+            {/* --- RIGHT COLUMN: INSPECTOR --- */}
+            <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col">
+                <PromptInspector
+                promptText={inspectedPrompt} 
+                    onPromptChange={setInspectedPrompt} 
+                    onCancel={() => setShowInspector(false)} 
+                    onRun={() => runInference(pendingUserMessage, inspectedPrompt)} 
+                    model={model}
+                isBuilding={isBuildingPrompt}
                 />
-                Enable Prompt Inspector
-                </label>
-            </div>
-                    
-            {/* Middle Row: System Prompt */}
-            <div className="flex gap-4">
-                <div className="flex-1">
-                    <SystemPromptControl 
-                        currentPrompt={systemPrompt}
-                        onPromptChange={setSystemPrompt}
-                    />
                 </div>
-                    
-                {/* Missing Models Warning */}
-                {missingSummarizers.length > 0 && (
-                    <div className="w-1/3 text-[10px] text-orange-400 bg-orange-900/20 p-2 rounded border border-orange-900/50 overflow-y-auto h-16">
-                        <strong>Missing Preferred Models:</strong>
-                        <ul className="list-disc list-inside mt-1 text-orange-300/80">
-                            {missingSummarizers.map(m => (
-                                <li key={m}>ollama pull {m}</li>
-                            ))}
-                        </ul>
+            
                     </div>
+            
+            {/* Refinery Modal (Overlay) */}
+                {editingMemory && (
+                    <RefineryModal 
+                        initialContent={editingMemory.content}
+                        memoryId={editingMemory.id.startsWith('temp_') ? undefined : editingMemory.id}
+                    model={model}
+                onClose={() => setEditingMemory(null)}
+                    onSave={handleRefinerySave}
+                />
                 )}
-            </div>
-        </header>
-
-        <main className="flex-1 overflow-y-auto">
-          <ChatPanel messages={messages} onSaveToMemory={handleSaveToMemory} />
-        </main>
-
-        <footer className="p-4 border-t border-gray-700 bg-gray-800/50">
-          <MessageInput 
-            onSendMessage={handleSendMessage} 
-            isLoading={isLoading || isBuildingPrompt}
-            onStop={handleStopGeneration}
-            onClearChat={handleClearChat}
-          />
-        </footer>
-      </div>
-
-      {/* Persistent Inspector Column */}
-      {showInspector && ( 
-        <PromptInspector 
-            promptText={inspectedPrompt}
-            onPromptChange={setInspectedPrompt}
-            onCancel={() => setShowInspector(false)}
-            onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
-            model={model}
-            isBuilding={isBuildingPrompt}
-        />
-      )}
-    </div>
-  );
-};
+                    </div>
+                        );
+                        };
 
 export default App;
+
+
+

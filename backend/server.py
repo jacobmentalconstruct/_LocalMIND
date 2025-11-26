@@ -11,7 +11,7 @@ import ollama
 # [NEW] Orchestration Modules
 import backend.profiles as profiles
 from backend.orchestrator import Orchestrator
-from backend.database import init_db, get_db_connection # Added get_db_connection
+from backend.database import init_db, get_db_connection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -131,6 +131,9 @@ class ChatRequest(BaseModel):
     system_prompt: str
     use_memory: bool = True
     summarizer_model: str | None = None
+
+class CreateMemoryRequest(BaseModel):
+    content: str
 
 class UpdateMemoryRequest(BaseModel):
     content: str
@@ -300,10 +303,12 @@ async def infer_with_prompt_endpoint(request: InferenceRequest):
             summary_text = summary_res['message']['content'].strip()
             
             if summary_text and "NO_DATA" not in summary_text:
-                save_embed = ollama.embeddings(model='mxbai-embed-large', prompt=summary_text)
-                new_id = str(os.urandom(8).hex())
-                collection.add(ids=[new_id], embeddings=[save_embed['embedding']], documents=[summary_text])
-                summary_note = {'id': new_id, 'content': summary_text}
+                # [CHANGED] We NO LONGER save to Chroma automatically.
+                # We just create a temporary object to send to the UI.
+                import uuid
+                temp_id = "temp_" + str(uuid.uuid4())[:8]
+                summary_note = {'id': temp_id, 'content': summary_text} 
+                # Note: collection.add is GONE.
         except Exception as e:
             logger.error(f"Sidecar failed: {e}")
 
@@ -330,6 +335,24 @@ RESPONSE:"""
         return {"result": response['message']['content']}
     except Exception as e:
         logger.error(f"Snippet analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/memories")
+def create_memory(request: CreateMemoryRequest):
+    try:
+        # 1. Embed
+        embedding_response = ollama.embeddings(model='mxbai-embed-large', prompt=request.content)
+        
+        # 2. Save to Chroma
+        new_id = str(os.urandom(8).hex())
+        collection.add(
+            ids=[new_id], 
+            embeddings=[embedding_response['embedding']], 
+            documents=[request.content]
+        )
+        return {"id": new_id, "content": request.content, "status": "success"}
+    except Exception as e:
+        logger.error(f"Error creating memory: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/memories/{memory_id}")
@@ -430,7 +453,7 @@ async def chat_endpoint(request: ChatRequest):
             
             If there are no new PERMANENT facts, reply exactly with "NO_DATA".
             
-            User: {request.original_message}
+            User: {request.original_message if hasattr(request, 'original_message') else request.message}
             AI: {assistant_response}
             
             Fact:
@@ -440,10 +463,12 @@ async def chat_endpoint(request: ChatRequest):
             summary_text = summary_res['message']['content'].strip()
 
             if summary_text and "NO_DATA" not in summary_text:
-                save_embed = ollama.embeddings(model='mxbai-embed-large', prompt=summary_text)
-                new_id = str(os.urandom(8).hex())
-                collection.add(ids=[new_id], embeddings=[save_embed['embedding']], documents=[summary_text])
-                summary_note = {'id': new_id, 'content': summary_text}
+                # [CHANGED] We NO LONGER save to Chroma automatically.
+                # We just create a temporary object to send to the UI.
+                import uuid
+                temp_id = "temp_" + str(uuid.uuid4())[:8]
+                summary_note = {'id': temp_id, 'content': summary_text} 
+                # Note: collection.add is GONE.
                 
         except Exception as e:
             logger.error(f"Summary failed: {e}")
@@ -580,4 +605,3 @@ async def render_prompt_endpoint(request: RenderRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
