@@ -201,7 +201,69 @@ export const resetChroma = async () => {
 await fetch(`${API_URL}/reset/chroma`, { method: 'POST' });
 };
 
+// --- PROJECT & TREE SERVICES ---
 
+export const getProjects = async (): Promise<Project[]> => {
+  try {
+    const response = await fetch(`${API_URL}/projects`);
+    const data = await response.json();
+    return data.projects;
+  } catch (error) {
+    console.error("Failed to fetch projects:", error);
+    return [];
+  }
+};
+
+export const createProject = async (name: string, description?: string): Promise<Project | null> => {
+  try {
+    const response = await fetch(`${API_URL}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description })
+    });
+    if (!response.ok) throw new Error("Failed to create project");
+    return await response.json();
+  } catch (error) {
+    console.error("Error creating project:", error);
+    return null;
+  }
+};
+
+export const getKnowledgeTree = async (projectId: string): Promise<TreeNode[]> => {
+  try {
+    const response = await fetch(`${API_URL}/tree?project_id=${projectId}`);
+    const data = await response.json();
+    return data.nodes;
+  } catch (error) {
+    console.error("Failed to fetch tree:", error);
+    return [];
+  }
+};
+
+export const createNode = async (projectId: string, parentId: string | null, name: string, type: 'folder' | 'file', content: string = "") => {
+  try {
+    const response = await fetch(`${API_URL}/tree/nodes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, parent_id: parentId, name, type, content })
+    });
+    if (!response.ok) throw new Error("Failed to create node");
+    return await response.json();
+  } catch (error) {
+    console.error("Error creating node:", error);
+    return null;
+  }
+};
+
+export const deleteNode = async (nodeId: string) => {
+  try {
+    const response = await fetch(`${API_URL}/tree/nodes/${nodeId}`, { method: 'DELETE' });
+    return response.ok;
+  } catch (error) {
+    console.error("Error deleting node:", error);
+    return false;
+  }
+};
 
 
 

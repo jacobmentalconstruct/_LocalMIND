@@ -42,7 +42,11 @@ class SessionManager:
         finally:
             conn.close()
 
-    def check_and_compact(self, session_id: str = "default_session", model_name: str = "qwen2.5:0.5b-instruct"):
+    def check_and_compact(
+        self,
+        session_id: str = "default_session",
+        model_name: str = "qwen2.5:0.5b-instruct",
+    ) -> None:
         """
         Checks if the unsummarized raw history exceeds our window.
         If so, it takes the oldest chunk, summarizes it via Ollama, and marks it as done.

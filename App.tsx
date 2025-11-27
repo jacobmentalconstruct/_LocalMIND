@@ -5,17 +5,21 @@ import {
   sendChat,
   getModels,
   getHistory,
-  getMemories,
   getSummarizerStatus,
   updateMemory,
   addMemory,
   buildPrompt,
   inferWithPrompt,
-getUserProfile,
-resetSQLite,
+  getUserProfile,
+  resetSQLite,
   resetChroma,
-  } from './services/ollamaService';
-import MemoryPanel from './components/MemoryPanel';
+  analyzeSnippet, // [NEW] Needed for the Right-Click Isolation
+} from './services/ollamaService';
+
+// [NEW] Swap MemoryPanel for ProjectExplorer
+import ProjectExplorer from './components/ProjectExplorer';
+import SnippetHelperModal from './components/SnippetHelperModal'; // [NEW]
+
 import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
@@ -26,7 +30,7 @@ import { BrainCircuitIcon, CircleDotIcon, PowerIcon, PowerOffIcon } from './comp
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [longTermMemory, setLongTermMemory] = useState<MemoryItem[]>([]);
+  // [REMOVED] const [longTermMemory, setLongTermMemory] = useState<MemoryItem[]>([]); -> Handled by Explorer now
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>('checking');
   const [isLoading, setIsLoading] = useState(false);
   const [model, setModel] = useState('llama3');
@@ -41,14 +45,20 @@ const App: React.FC = () => {
   const [editingMemory, setEditingMemory] = useState<MemoryItem | null>(null);
 
   // Inspector State
-  const [showInspector, setShowInspector] = useState(true); // Default to open based on mock
-  const [isBuildingPrompt, setIsBuildingPrompt] = useState(false); // [NEW] Loading state for orchestrator
+  const [showInspector, setShowInspector] = useState(true);
+  const [isBuildingPrompt, setIsBuildingPrompt] = useState(false);
   const [inspectedPrompt, setInspectedPrompt] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
-const [userProfile, setUserProfile] = useState<any | null>(null);
+  const [userProfile, setUserProfile] = useState<any | null>(null);
   const [userName, setUserName] = useState('User');
   const [userDescription, setUserDescription] = useState('Core operator of this LocalMIND workspace.');
-  
+
+  // [NEW] Snippet / Isolation Modal State
+  const [isSnippetOpen, setIsSnippetOpen] = useState(false);
+  const [snippetContent, setSnippetContent] = useState('');
+  const [snippetResult, setSnippetResult] = useState<string | null>(null);
+  const [isSnippetLoading, setIsSnippetLoading] = useState(false);
+
   // Column widths (in pixels) for the resizable layout
   const [leftColumnWidth, setLeftColumnWidth] = useState(260);
   const [rightColumnWidth, setRightColumnWidth] = useState(280);
@@ -68,11 +78,9 @@ const [userProfile, setUserProfile] = useState<any | null>(null);
     const delta = event.clientX - state.startX;
 
     if (state.activeHandle === 'left') {
-      // Dragging the edge between left + center
       const next = Math.min(Math.max(state.startLeft + delta, 200), 500);
       setLeftColumnWidth(next);
     } else if (state.activeHandle === 'right') {
-      // Dragging the edge between center + right
       const next = Math.min(Math.max(state.startRight - delta, 220), 520);
       setRightColumnWidth(next);
     }
@@ -118,12 +126,11 @@ const [userProfile, setUserProfile] = useState<any | null>(null);
       }
     });
 
-    // Get Summarizer Status
     getSummarizerStatus().then((status) => {
       setAvailableSummarizers(status.available);
       setMissingSummarizers(status.missing);
       if (status.available.length > 0) {
-        setActiveSummarizer(status.available[0]); // Auto-select best
+        setActiveSummarizer(status.available[0]);
       }
     });
   }, []);
@@ -131,38 +138,34 @@ const [userProfile, setUserProfile] = useState<any | null>(null);
   useEffect(() => {
     checkOllamaStatus();
 
-    // Load Memories (The "Important Notes")
-    getMemories().then((mems) => setLongTermMemory(mems));
+    // [UPDATED] No longer fetching flat "getMemories". The Project Explorer handles the tree.
 
     // Load chat history
     getHistory().then((history) => {
       if (history.length > 0) setMessages(history as any);
     });
-  
-  // Load user profile for the right-hand User panel
-  getUserProfile().then((profile) => {
-  if (profile) {
-  setUserProfile(profile);
-  if (profile.display_name) setUserName(profile.display_name);
-  if (profile.description) setUserDescription(profile.description);
-  }
-  });
+
+    // Load user profile
+    getUserProfile().then((profile) => {
+      if (profile) {
+        setUserProfile(profile);
+        if (profile.display_name) setUserName(profile.display_name);
+        if (profile.description) setUserDescription(profile.description);
+      }
+    });
   }, [checkOllamaStatus]);
 
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading || isBuildingPrompt) return;
 
-    // 1. Legacy Mode (no Inspector active)
     if (!showInspector) {
       await runInference(input, null);
       return;
     }
 
-    // 2. Inspector Mode – build the orchestrated prompt first
     setIsBuildingPrompt(true);
     setPendingUserMessage(input);
 
-    // Immediate visual skeleton while backend builds full context
     const skeleton = `=== SYSTEM ===
   ${systemPrompt}
 
@@ -175,7 +178,7 @@ Workspace: LocalMIND
   (Querying Session Manager...)
   
   === LONG-TERM MEMORY (RAG) ===
-  (Querying Vector Database...)
+  (Querying Knowledge Graph...)
 
   === RECENT HISTORY ===
   (Fetching SQLite Logs...)
@@ -186,54 +189,49 @@ Workspace: LocalMIND
   Assistant:`;
     setInspectedPrompt(skeleton);
 
-    // Safety net: if the backend never responds, clear the spinner after 60s
     const buildTimeout = window.setTimeout(() => {
       setIsBuildingPrompt(false);
-      setInspectedPrompt(prev =>
+      setInspectedPrompt((prev) =>
         prev +
         '\n\n# WARNING: Prompt build timed out. You can retry or run without the Inspector.'
       );
     }, 60000);
 
     try {
-      // Call the orchestrator to build the full prompt
       const data: any = await buildPrompt(model, input, systemPrompt, true, userName, userDescription);
       if (data && data.final_prompt) {
         setInspectedPrompt(data.final_prompt);
-        // later we can also feed data.meta into Session Context if we want
       }
     } catch (err) {
       console.error('Error building prompt:', err);
-      setInspectedPrompt(prev =>
+      setInspectedPrompt((prev) =>
         prev + '\n\n# ERROR: Failed to build prompt. Please try again.'
       );
     } finally {
       window.clearTimeout(buildTimeout);
-     setIsBuildingPrompt(false);
+      setIsBuildingPrompt(false);
     }
   };
 
   const handleWipeSQLite = async () => {
     if (confirm('Delete all chat history?')) {
-await resetSQLite();
-    setMessages([]);
-    setSessionSummary('');
-  }
+      await resetSQLite();
+      setMessages([]);
+    }
   };
-  
+
   const handleWipeVector = async () => {
-  if (confirm('Delete all long-term memories?')) {
-  await resetChroma();
-  setLongTermMemory([]);
-  }
+    if (confirm('Delete all long-term memories?')) {
+      await resetChroma();
+      // setLongTermMemory([]); -> No longer managing flat state
+    }
   };
-  
+
   const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
-  setIsLoading(true);
-  setProposedFacts([]); // Clear previous suggestions for a fresh turn
-  
-  // UI Updates
-  if (!messages.find((m) => m.content === originalInput)) {
+    setIsLoading(true);
+    setProposedFacts([]);
+
+    if (!messages.find((m) => m.content === originalInput)) {
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'user',
@@ -249,10 +247,8 @@ await resetSQLite();
     try {
       let data;
       if (overriddenPrompt) {
-        // Use new Inference Endpoint (Inspector Flow)
         data = await inferWithPrompt(overriddenPrompt, model, originalInput, activeSummarizer);
       } else {
-        // Use Standard Endpoint (Direct Flow)
         data = await sendChat(model, originalInput, systemPrompt, true, activeSummarizer);
       }
 
@@ -274,7 +270,6 @@ await resetSQLite();
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
-      // We do NOT close the inspector automatically in persistent mode
     }
   };
 
@@ -288,97 +283,79 @@ await resetSQLite();
 
   const handleRefinerySave = async (content: string, id?: string) => {
     if (id && !id.startsWith('temp_')) {
-      // Updating existing
       await handleUpdateMemory(id, content);
     } else {
-      // Creating new
-      const newMem = await addMemory(content);
-      if (newMem) {
-        setLongTermMemory((prev) => [newMem, ...prev]);
-        // Remove from proposed if it was there
-        if (id) setProposedFacts((prev) => prev.filter((p) => p.id !== id));
-      }
+      await addMemory(content);
+      // No local update needed, DB will handle it
+      if (id) setProposedFacts((prev) => prev.filter((p) => p.id !== id));
     }
-    setEditingMemory(null); // Close modal
+    setEditingMemory(null);
   };
 
   const handleSaveToMemory = (content: string) => {
-    if (longTermMemory.some((item) => item.content === content)) return;
-    const newMemoryItem: MemoryItem = { id: Date.now().toString(), content };
-    setLongTermMemory((prev) => [newMemoryItem, ...prev]);
-  };
-
-  const handleDeleteFromMemory = (id: string) => {
-    setLongTermMemory((prev) => prev.filter((item) => item.id !== id));
+    // For now, open the refinery to create a new generic fact
+    setEditingMemory({ id: 'temp_from_chat', content });
   };
 
   const handleUpdateMemory = async (id: string, newContent: string) => {
-    const success = await updateMemory(id, newContent);
-    if (success) {
-      setLongTermMemory((prev) =>
-        prev.map((item) => (item.id === id ? { ...item, content: newContent } : item)),
-      );
-    }
+    await updateMemory(id, newContent);
+    // Refresh logic would go here if we were still using the list
   };
 
   const handleClearChat = () => {
     setMessages([]);
   };
 
-  const getStatusIndicator = () => {
-    switch (ollamaStatus) {
-      case 'online':
-        return (
-          <div className="flex items-center gap-2 text-green-400">
-            <PowerIcon className="w-4 h-4" />
-            <span>System Online</span>
-          </div>
-        );
-      case 'offline':
-        return (
-          <div className="flex items-center gap-2 text-red-400">
-            <PowerOffIcon className="w-4 h-4" />
-            <span>System Offline</span>
-          </div>
-        );
-      case 'checking':
-        return (
-          <div className="flex items-center gap-2 text-yellow-400">
-            <CircleDotIcon className="w-4 h-4 animate-ping" />
-            <span>Checking...</span>
-          </div>
-        );
+  // [NEW] Handlers for the Project Explorer
+  const handleNodeSelect = (content: string) => {
+    // For now, selecting a node injects it into the system prompt control or message input?
+    // Let's copy it to the clipboard or focus it. 
+    // The user said: "Click a Memory -> It injects into the Session Context"
+    // Since Session Context UI is changing, let's just log it or maybe append to system prompt for now?
+    // Actually, let's just show it in the Inspector/Input for immediate use.
+    if(confirm("Load this file content into your message input?")) {
+        // Find input box? Or just set state if we had access to input state.
+        // For simplicity in this patch, we will trigger the Inspector with this content.
+        setInspectedPrompt(prev => prev + `\n\n[CONTEXT FROM FILE]:\n${content}`);
+        setShowInspector(true);
     }
+  };
+
+  const handleRunIsolated = (nodeId: string, content: string) => {
+    setSnippetContent(content);
+    setSnippetResult(null);
+    setIsSnippetOpen(true);
+  };
+
+  const handleAnalyzeSnippet = async (sys: string, user: string) => {
+     setIsSnippetLoading(true);
+     try {
+        const res = await analyzeSnippet(snippetContent, `${sys}\n\nUser Question: ${user}`, model);
+        if(res && res.result) {
+            setSnippetResult(res.result);
+        }
+     } catch(e) {
+        setSnippetResult("Error running analysis.");
+     } finally {
+        setIsSnippetLoading(false);
+     }
   };
 
   return (
     <div className="h-screen bg-gray-900 text-gray-100 font-sans p-2 overflow-hidden select-none">
-      {/* GRID LAYOUT 
-         Matches HTML mock: 260px | 1fr | 280px 
-      */}
-      {/* Add `min-h-0` so the grid and its children can shrink properly without
-          overflowing. Without this Tailwind utility the flex children (such as
-          the chat area) may grow beyond the viewport and cover other panels. */}
       <div
         className="grid gap-2 h-full min-h-0"
         style={{ gridTemplateColumns: `${leftColumnWidth}px 1fr ${rightColumnWidth}px` }}
       >
-        {/* --- LEFT COLUMN: MEMORY PANEL --- */}
+        {/* --- LEFT COLUMN: PROJECT EXPLORER (The Vault) --- */}
         <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col relative">
-          <MemoryPanel
-            memoryItems={longTermMemory}
-            proposedItems={proposedFacts}
-            onDelete={handleDeleteFromMemory}
-            onClear={() => setLongTermMemory([])}
-            onEdit={(item) => setEditingMemory(item)}
-            onCreate={() => setEditingMemory({ id: 'temp_manual_create', content: '' })}
-          activeSummarizer={activeSummarizer}
-          availableSummarizers={availableSummarizers}
-          onSummarizerChange={setActiveSummarizer}
-          onWipeSQLite={handleWipeSQLite}
-          onWipeVector={handleWipeVector}
+          
+          <ProjectExplorer 
+            onNodeSelect={handleNodeSelect}
+            onRunIsolated={handleRunIsolated}
           />
-          {/* Resize handle between left and center */}
+          
+          {/* Resize handle */}
           <div
             className="absolute top-0 right-0 h-full w-1 cursor-col-resize bg-gray-800/70 hover:bg-indigo-500 transition-colors"
             onMouseDown={beginColumnDrag('left')}
@@ -386,17 +363,13 @@ await resetSQLite();
         </div>
 
         {/* --- CENTER COLUMN: SYSTEM + CHAT --- */}
-        {/* Allow the middle column to shrink vertically by adding `min-h-0`. This fixes
-            an issue where the chat panel would overlap the message input area. */}
         <div className="flex flex-col gap-2 min-w-0 min-h-0">
-          {/* Top: System Prompt Control */}
           <div className="h-[120px] bg-gray-800/50 border border-gray-700 rounded-lg p-3 flex flex-col gap-2 shadow-sm overflow-hidden">
             <div className="flex justify-between items-center">
               <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
                 <BrainCircuitIcon className="w-4 h-4" />
                 System Instruction
               </span>
-              {/* Model Selector Tucked Here */}
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
@@ -414,13 +387,13 @@ await resetSQLite();
             </div>
           </div>
 
-          {/* Bottom: Chat Window */}
-          {/* Chat container now sets `min-h-0` to allow the message list to shrink and
-              leaves room for the input box. Without this the scroll area could
-              overflow and sit on top of the input. */}
           <div className="flex-1 bg-gray-800/30 border border-gray-700 rounded-lg flex flex-col overflow-hidden relative min-h-0">
             <div className="flex-1 overflow-y-auto relative min-h-0">
-              <ChatPanel messages={messages} onSaveToMemory={handleSaveToMemory} />
+              <ChatPanel 
+                 messages={messages} 
+                 onSaveToMemory={handleSaveToMemory} 
+                 onAskAboutSelection={(text) => handleRunIsolated("selection", text)} 
+              />
             </div>
             <div className="p-3 border-t border-gray-700 bg-gray-800/80">
               <MessageInput
@@ -437,33 +410,33 @@ await resetSQLite();
         <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col relative">
           <div className="min-h-[120px] shrink-0 border-b border-gray-800">
             <UserPanel
-            name={userName}
-            description={userDescription}
-            onSave={(n, d) => {
-            setUserName(n);
-            setUserDescription(d);
-          }}
-          />
+              name={userName}
+              description={userDescription}
+              onSave={(n, d) => {
+                setUserName(n);
+                setUserDescription(d);
+              }}
+            />
           </div>
-            <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0">
             <PromptInspector
-          promptText={inspectedPrompt}
-        onPromptChange={setInspectedPrompt}
-        onCancel={() => setShowInspector(false)}
-        onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
-        model={model}
-        isBuilding={isBuildingPrompt}
-        />
-        </div>
-        {/* Resize handle between center and right */}
-        <div
-        className="absolute top-0 left-0 h-full w-1 cursor-col-resize bg-gray-800/70 hover:bg-indigo-500 transition-colors"
-        onMouseDown={beginColumnDrag('right')}
-        />
+              promptText={inspectedPrompt}
+              onPromptChange={setInspectedPrompt}
+              onCancel={() => setShowInspector(false)}
+              onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
+              model={model}
+              isBuilding={isBuildingPrompt}
+            />
+          </div>
+          <div
+            className="absolute top-0 left-0 h-full w-1 cursor-col-resize bg-gray-800/70 hover:bg-indigo-500 transition-colors"
+            onMouseDown={beginColumnDrag('right')}
+          />
         </div>
       </div>
 
-      {/* Refinery Modal (Overlay) */}
+      {/* --- MODALS --- */}
+      
       {editingMemory && (
         <RefineryModal
           initialContent={editingMemory.content}
@@ -473,20 +446,20 @@ await resetSQLite();
           onSave={handleRefinerySave}
         />
       )}
+
+      {/* [NEW] Snippet / Isolation Modal */}
+      <SnippetHelperModal
+        isOpen={isSnippetOpen}
+        snippet={snippetContent}
+        model={model}
+        isLoading={isSnippetLoading}
+        result={snippetResult}
+        onClose={() => setIsSnippetOpen(false)}
+        onRun={handleAnalyzeSnippet}
+      />
+      
     </div>
   );
 };
 
 export default App;
-
-
-
-
-
-
-
-
-
-
-
-

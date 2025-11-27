@@ -22,4 +22,19 @@ final_prompt: string;
 meta: any;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  created_at?: string;
+}
 
+export interface TreeNode {
+  id: string;
+  project_id: string;
+  parent_id: string | null;
+  name: string;
+  type: 'folder' | 'file';
+  content?: string;
+  children?: TreeNode[]; // Helper for recursive rendering if needed
+}

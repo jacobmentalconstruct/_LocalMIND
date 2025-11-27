@@ -93,6 +93,30 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # [NEW] Projects Table (Multi-Tenancy Container)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    # [NEW] Knowledge Nodes (The Tree Structure)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS knowledge_nodes (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    parent_id TEXT,
+    name TEXT,
+    type TEXT,
+    content TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+    )
+    ''')
 
     # --- 2. Run Migrations ---
     _migrate_schema(cursor)
@@ -114,3 +138,4 @@ def init_db():
     conn.commit()
     conn.close()
     logger.info("Database initialized and checked.")
+
