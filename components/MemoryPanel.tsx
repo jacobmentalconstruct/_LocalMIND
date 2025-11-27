@@ -11,9 +11,27 @@ interface MemoryPanelProps {
   onClear: () => void;
   onEdit: (item: MemoryItem) => void;
   onCreate: () => void;
+// Summarizer & Reset Props
+activeSummarizer: string;
+availableSummarizers: string[];
+onSummarizerChange: (model: string) => void;
+onWipeSQLite: () => void;
+onWipeVector: () => void;
 }
 
-const MemoryPanel: React.FC<MemoryPanelProps> = ({ memoryItems, proposedItems, onDelete, onClear, onEdit, onCreate }) => {
+const MemoryPanel: React.FC<MemoryPanelProps> = ({
+memoryItems, 
+proposedItems, 
+onDelete, 
+onClear, 
+onEdit, 
+onCreate,
+activeSummarizer,
+availableSummarizers,
+onSummarizerChange,
+onWipeSQLite,
+onWipeVector
+}) => {
 const [activeTab, setActiveTab] = useState<'toc' | 'list'>('toc');
 const [suggestionLimit, setSuggestionLimit] = useState<number>(3);
   const [sessionSummary, setSessionSummary] = useState("Initializing session context...");
@@ -33,11 +51,31 @@ const [suggestionLimit, setSuggestionLimit] = useState<number>(3);
       
       {/* --- TOP: CHAT INFO / SUMMARY --- */}
       <div className="shrink-0 border-b border-gray-700 bg-gray-800/40 flex flex-col h-[15%] min-h-[100px]">
-          <div className="px-3 py-2 bg-gray-800/80 border-b border-gray-700/50 flex items-center gap-2">
+          <div className="px-3 py-2 bg-gray-800/80 border-b border-gray-700/50 flex items-center justify-between">
+             <div className="flex items-center gap-2">
              <BrainCircuitIcon className="w-3.5 h-3.5 text-indigo-400" />
-             <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Session Context</span>
+          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Session Context</span>
           </div>
-          <div className="flex-1 p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700">
+      <div className="flex items-center gap-1">
+      {/* Summarizer Dropdown */}
+      <select
+      value={activeSummarizer}
+      onChange={(e) => onSummarizerChange(e.target.value)}
+      className="w-24 text-[9px] bg-gray-900 border border-gray-600 rounded text-gray-400 focus:outline-none focus:border-indigo-500"
+      title="Select Summarizer Model"
+      >
+      {availableSummarizers.map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+      {/* Wipe Buttons */}
+      <button onClick={onWipeSQLite} className="p-1 hover:text-red-400 text-gray-500" title="Wipe Chat History (SQLite)">
+      <TrashIcon className="w-3 h-3" />
+      </button>
+      <button onClick={onWipeVector} className="p-1 hover:text-red-400 text-gray-500" title="Wipe Long-Term Memory (Vector)">
+      <BookIcon className="w-3 h-3" />
+      </button>
+      </div>
+      </div>
+      <div className="flex-1 p-3 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-700">
             <div className="prose prose-invert prose-xs text-xs text-gray-400 leading-relaxed">
                 {sessionSummary}
             </div>
@@ -208,6 +246,10 @@ No memories saved yet.
 };
 
 export default MemoryPanel;
+
+
+
+
 
 
 

@@ -12,11 +12,14 @@ class Orchestrator:
         # Initialize the manager to handle the "Deep Past"
         self.session_manager = SessionManager()
 
-    def build_context_schema(self, user_message, model_name, system_prompt_override, memories, rag_context, history):
+    def build_context_schema(self, user_message, model_name, system_prompt_override, memories, rag_context, history, identity_overrides=None):
         """
         Assembles all context sources into a structured schema.
         """
         user_profile = self.profiles.get_user_profile()
+        if identity_overrides:
+            user_profile.update(identity_overrides)
+            
         model_profile = self.profiles.get_model_profile(model_name)
         
         # Use override if provided, else use model default, else use app default
@@ -106,3 +109,6 @@ User: {schema['current_message']}
 Assistant:"""
         
         return final_prompt
+
+
+

@@ -143,6 +143,8 @@ class BuildPromptRequest(BaseModel):
     model: str
     system_prompt: str
     use_memory: bool = True
+user_name: str | None = None
+user_description: str | None = None
 
 class InferenceRequest(BaseModel):
     final_prompt: str
@@ -164,6 +166,20 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # --- ENDPOINTS ---
+
+@app.get("/user_profile")
+def get_user_profile():
+    """Return the active user profile used by the orchestrator.
+
+    For now this is the seeded 'demo_user', but in the future this can
+    be driven by authentication / multi-user selection.
+    """
+    try:
+        profile = profiles.get_user_profile("demo_user")
+        return profile
+    except Exception as e:
+        logger.error(f"Error fetching user profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch user profile")
 
 @app.get("/summarizers")
 def get_summarizer_status():
@@ -240,13 +256,20 @@ async def build_prompt_endpoint(request: BuildPromptRequest):
                 history.append({'role': row['role'], 'content': row['content']})
 
         # 3. Build Schema
+        overrides = {}
+        if request.user_name:
+            overrides["display_name"] = request.user_name
+        if request.user_description:
+            overrides["description"] = request.user_description
+        
         schema = orchestrator.build_context_schema(
             user_message=request.message,
             model_name=request.model,
             system_prompt_override=request.system_prompt,
             memories=memories,
             rag_context=rag_context,
-            history=history
+            history=history,
+            identity_overrides=overrides
         )
 
         # 4. Render
@@ -541,15 +564,39 @@ def get_history():
 @app.get("/session_summary")
 def get_session_summary_endpoint():
     try:
-        # We need to instantiate the manager
-        from backend.session_manager import SessionManager
-        mgr = SessionManager()
-        summary = mgr.get_session_summary("default_session")
+        summary = orchestrator.session_manager.get_session_summary("default_session")
         return {"summary": summary}
     except Exception as e:
         logger.error(f"Error fetching session summary: {e}")
         return {"summary": ""}
 
+@app.post("/reset/sqlite")
+def reset_sqlite_endpoint():
+try:
+# Delete all rows from chats and session_summaries
+conn = get_db_connection()
+conn.execute("DELETE FROM chats")
+conn.execute("DELETE FROM session_summaries")
+conn.commit()
+conn.close()
+return {"status": "success", "message": "SQLite history cleared."}
+except Exception as e:
+logger.error(f"Error clearing SQLite: {e}")
+raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/reset/chroma")
+def reset_chroma_endpoint():
+try:
+# Delete all documents in the collection
+# Note: In Chroma > 0.4, use delete() with empty where clause or delete collection
+existing_ids = collection.get()['ids']
+if existing_ids:
+collection.delete(ids=existing_ids)
+return {"status": "success", "message": "Vector store cleared."}
+except Exception as e:
+logger.error(f"Error clearing Chroma: {e}")
+raise HTTPException(status_code=500, detail=str(e))
+    
 # Endpoint to fetch raw ingredients
 @app.post("/get_prompt_context")
 async def get_prompt_context_endpoint(request: BuildPromptRequest):
@@ -605,3 +652,8 @@ async def render_prompt_endpoint(request: RenderRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
+

@@ -49,23 +49,42 @@ export const getSummarizerStatus = async (): Promise<{available: string[], missi
     }
 };
 
-// services/ollamaService.ts
-export const getSessionSummary = async (): Promise<string> => {
+// [NEW] Fetch user profile (identity block)
+export const getUserProfile = async (): Promise<any> => {
     try {
-        const response = await fetch(`${API_URL}/session_summary`);
+        const response = await fetch(`${API_URL}/user_profile`);
         const data = await response.json();
-        return data.summary;
+        return data;
     } catch (error) {
-        console.error("Failed to fetch session summary:", error);
-        return "";
+        console.error("Failed to fetch user profile:", error);
+        return null;
     }
 };
 
-export const buildPrompt = async (model: string, message: string, system_prompt: string, use_memory: boolean) => {
+// services/ollamaService.ts
+export const getSessionSummary = async (): Promise<string> => {
+try {
+const response = await fetch(`${API_URL}/session_summary`);
+const data = await response.json();
+return data.summary;
+} catch (error) {
+console.error("Failed to fetch session summary:", error);
+return "";
+}
+};
+
+export const buildPrompt = async (model: string, message: string, system_prompt: string, use_memory: boolean, userName?: string, userDescription?: string) => {
 const response = await fetch(`${API_URL}/build_prompt`, {
 method: 'POST',
 headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ model, message, system_prompt, use_memory })
+body: JSON.stringify({
+model,
+message,
+system_prompt,
+use_memory,
+user_name: userName,
+user_description: userDescription
+})
 });
 return await response.json();
 };
@@ -173,3 +192,16 @@ export const addMemory = async (content: string): Promise<MemoryItem | null> => 
         return null;
     }
 };
+
+export const resetSQLite = async () => {
+await fetch(`${API_URL}/reset/sqlite`, { method: 'POST' });
+};
+
+export const resetChroma = async () => {
+await fetch(`${API_URL}/reset/chroma`, { method: 'POST' });
+};
+
+
+
+
+
