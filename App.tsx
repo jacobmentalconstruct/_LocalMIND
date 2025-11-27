@@ -4,9 +4,11 @@ import { checkStatus, sendChat, getModels, getHistory, getMemories, getSummarize
 import MemoryPanel from './components/MemoryPanel';
 import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
+import SnippetHelperModal from './components/SnippetHelperModal';
 import MessageInput from './components/MessageInput';
 import SystemPromptControl from './components/SystemPromptControl';
 import PromptInspector from './components/PromptInspector';
+import UserPanel from './components/UserPanel';
 import { BrainCircuitIcon, CircleDotIcon, PowerIcon, PowerOffIcon } from './components/icons';
 
 const App: React.FC = () => {
@@ -31,6 +33,12 @@ const App: React.FC = () => {
   const [inspectedPrompt, setInspectedPrompt] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
   
+  // Snippet helper state
+  const [snippetHelperOpen, setSnippetHelperOpen] = useState(false);
+  const [snippetText, setSnippetText] = useState('');
+  const [snippetResult, setSnippetResult] = useState<string | null>(null);
+  const [isSnippetLoading, setIsSnippetLoading] = useState(false);
+  
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const checkOllamaStatus = useCallback(async () => {
@@ -42,22 +50,36 @@ const App: React.FC = () => {
   // Fetch models and summarizers on mount
   useEffect(() => {
     getModels().then(models => {
-      if (models.length > 0) {
-        setAvailableModels(models);
-        setModel(models[0]);
-      }
-    });
-  
-    // Get Summarizer Status
-    getSummarizerStatus().then(status => {
-        setAvailableSummarizers(status.available);
-        setMissingSummarizers(status.missing);
-        if (status.available.length > 0) {
-            setActiveSummarizer(status.available[0]); // Auto-select best
+      setAvailableModels(models);
+        if (models.length > 0) {
+        let chosen = models[0];
+      if (typeof window !== 'undefined') {
+    const saved = window.localStorage.getItem('localmind.defaultModel');
+  if (saved && models.includes(saved)) {
+    chosen = saved;
+    }
         }
-    });
+        setModel(chosen);
+        }
+            });
+        
+    // Get Summarizer Status
+  getSummarizerStatus().then(status => {
+setAvailableSummarizers(status.available);
+  setMissingSummarizers(status.missing);
+  if (status.available.length > 0) {
+  let chosen = status.available[0];
+  if (typeof window !== 'undefined') {
+  const saved = window.localStorage.getItem('localmind.defaultSummarizer');
+  if (saved && status.available.includes(saved)) {
+  chosen = saved;
+  }
+  }
+  setActiveSummarizer(chosen);
+  }
+  });
   }, []);
-
+  
   useEffect(() => {
       checkOllamaStatus();
     
@@ -83,28 +105,42 @@ const App: React.FC = () => {
     setIsBuildingPrompt(true);
     setPendingUserMessage(input);
 
-    // [NEW] IMMEDIATE VISUAL SKELETON
-    // This matches your request: "Populate right away with the template"
-    setInspectedPrompt(`=== SYSTEM ===
-  ${systemPrompt}
-
-  === IDENTITY ===
+    // Immediate visual skeleton while backend builds full context
+    const skeleton = `=== SYSTEM ===
+    ${systemPrompt}
+  
+=== IDENTITY ===
   User: (Loading Profile...)
   Workspace: LocalMIND
-
-  === PREVIOUS SESSION CONTEXT ===
+  
+=== PREVIOUS SESSION CONTEXT ===
   (Querying Session Manager...)
-
-  === LONG-TERM MEMORY (RAG) ===
+  
+=== LONG-TERM MEMORY (RAG) ===
   (Querying Vector Database...)
-
-  === RECENT HISTORY ===
+  
+=== RECENT HISTORY ===
   (Fetching SQLite Logs...)
-
-  === CURRENT MESSAGE ===
+  
+=== CURRENT MESSAGE ===
   User: ${input}
-
-  Assistant:`);
+  
+Assistant:`;
+  
+  setInspectedPrompt(skeleton);
+  
+  try {
+  const data: any = await buildPrompt(model, input, systemPrompt, true);
+  if (data && data.final_prompt) {
+  setInspectedPrompt(data.final_prompt);
+  }
+  // data.meta is available here if we later want to feed Session Context
+  } catch (err) {
+  console.error('Error building prompt:', err);
+  setInspectedPrompt(prev => prev + '\n\n# ERROR: Failed to build prompt. Please try again.');
+  } finally {
+  setIsBuildingPrompt(false);
+  }
   };
   const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
     setIsLoading(true);
@@ -152,6 +188,30 @@ const App: React.FC = () => {
       abortControllerRef.current = null;
       setIsLoading(false);
     }
+  };
+  
+  const handleAskAboutSelection = (snippet: string) => {
+  const trimmed = snippet.trim();
+  if (!trimmed) return;
+  setSnippetText(trimmed);
+  setSnippetResult(null);
+  setSnippetHelperOpen(true);
+  };
+  
+  const handleRunSnippetAnalysis = async (systemPromptForSnippet: string, userPrompt: string) => {
+  if (!snippetText.trim() || !userPrompt.trim()) return;
+  setIsSnippetLoading(true);
+  try {
+  const composedSystem = systemPromptForSnippet;
+  const composedInput = `${userPrompt}\n\n<RAW_SNIPPET>\n${snippetText}\n</RAW_SNIPPET>`;
+  const data: any = await sendChat(model, composedInput, composedSystem, false, activeSummarizer);
+  setSnippetResult(data.response || '');
+  } catch (err) {
+  console.error('Error during snippet analysis:', err);
+  setSnippetResult('Error during snippet analysis.');
+  } finally {
+  setIsSnippetLoading(false);
+  }
   };
   
   const handleRefinerySave = async (content: string, id?: string) => {
@@ -233,20 +293,49 @@ const App: React.FC = () => {
                         
                     {/* Top: System Prompt Control */}
                 <div className="h-[120px] bg-gray-800/50 border border-gray-700 rounded-lg p-3 flex flex-col gap-2 shadow-sm overflow-hidden"> 
-               <div className="flex justify-between items-center">
+               <div className="flex justify-between items-center gap-2">
                 <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
                     <BrainCircuitIcon className="w-4 h-4" />
                     System Instruction
                         </span>
-                        {/* Model Selector Tucked Here */}
+                        <div className="flex items-center gap-2">
+                            {/* Model Selector */}
                             <select
                             value={model}
-                            onChange={e => setModel(e.target.value)}
-                        className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300"
-                        >
-                            {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                            </div>
+                        onChange={e => {
+                        const next = e.target.value;
+                            setModel(next);
+                        if (typeof window !== 'undefined') {
+                            window.localStorage.setItem('localmind.defaultModel', next);
+               }
+               }}
+               className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300"
+               >
+               {availableModels.map(m => (
+               <option key={m} value={m}>{m}</option>
+               ))}
+               </select>
+               
+               {/* Summarizer Selector */}
+               {availableSummarizers.length > 0 && (
+               <select
+               value={activeSummarizer}
+               onChange={e => {
+               const next = e.target.value;
+               setActiveSummarizer(next);
+               if (typeof window !== 'undefined') {
+               window.localStorage.setItem('localmind.defaultSummarizer', next);
+               }
+               }}
+               className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300"
+               >
+               {availableSummarizers.map(s => (
+               <option key={s} value={s}>{s}</option>
+               ))}
+               </select>
+               )}
+               </div>
+               </div>
                         <div className="flex-1 min-h-0 overflow-y-auto"> 
                         <SystemPromptControl
                     currentPrompt={systemPrompt}
@@ -261,7 +350,11 @@ const App: React.FC = () => {
                                overflow and sit on top of the input. */}
                             <div className="flex-1 bg-gray-800/30 border border-gray-700 rounded-lg flex flex-col overflow-hidden relative min-h-0">
                             <div className="flex-1 overflow-y-auto relative min-h-0">
-                        <ChatPanel messages={messages} onSaveToMemory={handleSaveToMemory} />
+                        <ChatPanel
+                        messages={messages}
+                        onSaveToMemory={handleSaveToMemory}
+                        onAskAboutSelection={handleAskAboutSelection}
+                        />
                             </div>
                                 <div className="p-3 border-t border-gray-700 bg-gray-800/80"> 
                             <MessageInput
@@ -275,21 +368,45 @@ const App: React.FC = () => {
             </div>
         
             {/* --- RIGHT COLUMN: INSPECTOR --- */}
-            <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col">
-                <PromptInspector
-                promptText={inspectedPrompt} 
-                    onPromptChange={setInspectedPrompt} 
-                    onCancel={() => setShowInspector(false)} 
-                    onRun={() => runInference(pendingUserMessage, inspectedPrompt)} 
-                    model={model}
-                isBuilding={isBuildingPrompt}
-                />
+            <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col min-h-0">
+                {/* Top: User Panel */}
+                <div className="h-[120px] border-b border-gray-800"> 
+                    <UserPanel 
+                    name="User" 
+                    description="Core operator of this LocalMIND workspace. Configure this profile later to give the agent a richer, concise description." 
+                    />
                 </div>
+                
+                {/* Bottom: Prompt Inspector */}
+            <div className="flex-1 min-h-0">
+            <PromptInspector
+            promptText={inspectedPrompt}
+            onPromptChange={setInspectedPrompt}
+            onCancel={() => setShowInspector(false)}
+            onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
+            model={model}
+            isBuilding={isBuildingPrompt}
+            />
+            </div>
+            </div>
             
                     </div>
             
+            {/* Snippet Helper Modal (Overlay) */}
+                {snippetHelperOpen && (
+            <SnippetHelperModal
+            isOpen={snippetHelperOpen}
+            snippet={snippetText}
+            model={model}
+            isLoading={isSnippetLoading}
+            result={snippetResult}
+            onClose={() => setSnippetHelperOpen(false)}
+            onRun={handleRunSnippetAnalysis}
+            />
+            )}
+            
             {/* Refinery Modal (Overlay) */}
-                {editingMemory && (
+            {editingMemory && (
                     <RefineryModal 
                         initialContent={editingMemory.content}
                         memoryId={editingMemory.id.startsWith('temp_') ? undefined : editingMemory.id}
@@ -303,6 +420,17 @@ const App: React.FC = () => {
                         };
 
 export default App;
+
+
+
+
+
+
+
+
+
+
+
 
 
 
