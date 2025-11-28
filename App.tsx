@@ -14,13 +14,16 @@ import {
   resetSQLite,
   resetChroma,
   analyzeSnippet,
+  createNode,
+  deleteNode,
 } from './services/ollamaService';
 
 // Components
 import ProjectExplorer from './components/ProjectExplorer';
 import SnippetHelperModal from './components/SnippetHelperModal';
+import FileSaveModal from './components/FileSaveModal';
 import SessionInfoPanel from './components/SessionInfoPanel';
-import SuggestionsPanel from './components/SuggestionsPanel';
+import NodeInspectorPanel from './components/NodeInspectorPanel'; // [NEW]
 import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
@@ -32,7 +35,7 @@ import { BrainCircuitIcon } from './components/icons';
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>('checking');
-  const [isLoading, setIsLoading] = useState(false); // Global loading (blocks input)
+  const [isLoading, setIsLoading] = useState(false);
   const [model, setModel] = useState('llama3');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
@@ -55,9 +58,15 @@ const App: React.FC = () => {
   const [userName, setUserName] = useState('User');
   const [userDescription, setUserDescription] = useState('Core operator of this LocalMIND workspace.');
 
+  // Project & Tree State
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [activeNode, setActiveNode] = useState<{id: string, name: string, content: string} | null>(null);
+  const [treeRefreshTrigger, setTreeRefreshTrigger] = useState(0);
+
   // Snippet / Isolation Modal State
   const [isSnippetOpen, setIsSnippetOpen] = useState(false);
   const [snippetContent, setSnippetContent] = useState('');
+  const [isFileSaveOpen, setIsFileSaveOpen] = useState(false);
   const [snippetResult, setSnippetResult] = useState<string | null>(null);
   const [isSnippetLoading, setIsSnippetLoading] = useState(false);
 
@@ -156,19 +165,16 @@ const App: React.FC = () => {
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading || isBuildingPrompt) return;
 
-    // Reset staging
     setPreviewResponse(null);
     setPendingUserMessage(input);
 
-    // 1. Legacy Mode (Direct Fire)
     if (!showInspector) {
-      await runInference(input, null, true); // true = autoCommit
+      await runInference(input, null, true);
       return;
     }
 
-    // 2. Staging Mode - AUTO DRAFT
     setIsBuildingPrompt(true);
-    setInspectedPrompt("Building orchestration context..."); // Visual feedback
+    setInspectedPrompt("Building orchestration context...");
 
     const buildTimeout = window.setTimeout(() => {
       setIsBuildingPrompt(false);
@@ -176,12 +182,10 @@ const App: React.FC = () => {
     }, 60000);
 
     try {
-      // Step A: Build the prompt
       const data: any = await buildPrompt(model, input, systemPrompt, true, userName, userDescription);
       
       if (data && data.final_prompt) {
         setInspectedPrompt(data.final_prompt);
-        // Step B: Auto-Run Inference (Draft Mode)
         await runInference(input, data.final_prompt, false); 
       }
     } catch (err) {
@@ -206,7 +210,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Main Inference Engine
   const runInference = async (originalInput: string, promptToRun: string | null, autoCommit: boolean) => {
     setIsLoading(true);
     abortControllerRef.current = new AbortController();
@@ -214,7 +217,6 @@ const App: React.FC = () => {
     let assistantMessageId = '';
 
     try {
-      // 1. Commit Mode: Update UI immediately with placeholders
       if (autoCommit) {
         setProposedFacts([]);
         if (!messages.find((m) => m.content === originalInput)) {
@@ -225,17 +227,13 @@ const App: React.FC = () => {
         setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: '' }]);
       }
 
-      // 2. Execute Inference
       let data;
       if (promptToRun) {
-        // Staging/Inspector flow
         data = await inferWithPrompt(promptToRun, model, originalInput, activeSummarizer);
       } else {
-        // Legacy flow
         data = await sendChat(model, originalInput, systemPrompt, true, activeSummarizer);
       }
 
-      // 3. Handle Result
       if (autoCommit) {
         setMessages((prev) =>
           prev.map((msg) =>
@@ -246,7 +244,6 @@ const App: React.FC = () => {
           setProposedFacts((prev) => [...prev, data.new_memory]);
         }
       } else {
-        // Staging Mode: Just update preview
         setPreviewResponse(data.response);
       }
 
@@ -284,6 +281,18 @@ const App: React.FC = () => {
     setEditingMemory(null);
   };
 
+  const handleSaveFile = () => {
+    if (previewResponse) {
+        setIsFileSaveOpen(true);
+    }
+  };
+  
+  const handleFileSaveSubmit = async (projectId: string, parentId: string | null, filename: string, content: string) => {
+    await createNode(projectId, parentId, filename, 'file', content);
+    setIsFileSaveOpen(false);
+    setTreeRefreshTrigger(prev => prev + 1); // FORCE REFRESH
+  };
+  
   const handleSaveToMemory = (content: string) => {
     setEditingMemory({ id: 'temp_from_chat', content });
   };
@@ -295,19 +304,14 @@ const App: React.FC = () => {
   const handleCommit = async () => {
     if (!previewResponse || !pendingUserMessage) return;
 
-    // Manually add to Chat History UI
     const userMessage: ChatMessage = { id: Date.now().toString(), role: 'user', content: pendingUserMessage };
     setMessages((prev) => [...prev, userMessage]);
 
     const botMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'assistant', content: previewResponse };
     setMessages((prev) => [...prev, botMessage]);
 
-    // Note: Backend has already saved this interaction during inference (unless we implement the dry_run flag later).
-    
-    // Clear Staging
     setPreviewResponse(null);
     setPendingUserMessage('');
-    // We keep inspector open or closed? User preference. For now, keep open but ready for next.
   };
 
   const handleDiscard = () => {
@@ -326,13 +330,25 @@ const App: React.FC = () => {
     setMessages([]);
   };
 
-  // Handlers for the Project Explorer
-  const handleNodeSelect = (content: string) => {
+  // Node Handlers
+  const handleNodeClick = (node: { id: string, name: string, content: string }) => {
+    setActiveNode(node);
+  };
+
+  const handleNodeDoubleClick = (content: string) => {
     if(confirm("Load this file content into your message input?")) {
         setInspectedPrompt(prev => prev + `\n\n[CONTEXT FROM FILE]:\n${content}`);
         setShowInspector(true);
     }
   };
+
+  const handleDeleteNode = async (id: string) => {
+    if(confirm("Delete this file?")) {
+        await deleteNode(id);
+        setActiveNode(null);
+        setTreeRefreshTrigger(prev => prev + 1);
+    }
+  }
 
   const handleRunIsolated = (nodeId: string, content: string) => {
     setSnippetContent(content);
@@ -360,7 +376,7 @@ const App: React.FC = () => {
         className="grid gap-2 h-full min-h-0"
         style={{ gridTemplateColumns: `${leftColumnWidth}px 1fr ${rightColumnWidth}px` }}
       >
-        {/* --- LEFT COLUMN: SESSION + TREE + SUGGESTIONS --- */}
+        {/* --- LEFT COLUMN: SESSION + TREE + INSPECTOR --- */}
         <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col relative">
           
           <SessionInfoPanel 
@@ -373,14 +389,19 @@ const App: React.FC = () => {
 
           <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
             <ProjectExplorer 
-              onNodeSelect={handleNodeSelect}
+              selectedProjectId={selectedProjectId}
+              onProjectChange={setSelectedProjectId}
+              onNodeClick={handleNodeClick}
+              onNodeDoubleClick={handleNodeDoubleClick}
               onRunIsolated={handleRunIsolated}
+              refreshTrigger={treeRefreshTrigger}
             />
           </div>
 
-          <SuggestionsPanel 
-            proposedItems={proposedFacts}
-            onEdit={(item) => setEditingMemory(item)}
+          <NodeInspectorPanel 
+            selectedNode={activeNode}
+            onRunIsolation={(id, content) => handleRunIsolated(id, content)}
+            onDelete={handleDeleteNode}
           />
           
           {/* Resize handle */}
@@ -458,6 +479,7 @@ const App: React.FC = () => {
               model={model}
               isBuilding={isBuildingPrompt}
               isInferring={isLoading}
+              onSaveFile={handleSaveFile}
             />
           </div>
           <div
@@ -488,6 +510,14 @@ const App: React.FC = () => {
         onClose={() => setIsSnippetOpen(false)}
         onRun={handleAnalyzeSnippet}
       />
+      
+      {isFileSaveOpen && previewResponse && (
+      <FileSaveModal 
+      initialContent={previewResponse}
+      onSave={handleFileSaveSubmit}
+      onClose={() => setIsFileSaveOpen(false)}
+      />
+      )}
       
     </div>
   );
