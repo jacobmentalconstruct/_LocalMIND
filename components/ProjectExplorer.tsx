@@ -94,16 +94,18 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({ onNodeSelect, onRunIs
 
     return children.map(node => (
       <div key={node.id} className="select-none">
-        <div 
-          className={`flex items-center justify-between py-1 px-2 hover:bg-gray-800 cursor-pointer group text-xs
-            ${node.type === 'folder' ? 'text-indigo-200 font-semibold' : 'text-gray-300'}
-          `}
+        <div
+          className={`flex items-center justify-between py-1 px-2 hover:bg-gray-800 cursor-pointer group text-xs ${node.type === 'folder' ? 'text-indigo-200 font-semibold' : 'text-gray-300'}`}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
+
           onClick={() => node.type === 'file' && onNodeSelect(node.content || '')}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
+            const x = e.clientX;
+            const y = e.clientY;
+            setContextMenu({ x, y, nodeId: node.id });
+            return false;
           }}
         >
           <div className="flex items-center gap-2 overflow-hidden">

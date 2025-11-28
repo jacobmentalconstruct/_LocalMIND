@@ -138,8 +138,12 @@ export const getModels = async (): Promise<string[]> => {
   try {
     const response = await fetch(`${API_URL}/models`);
     const data = await response.json();
-    return data.models.map((model: any) => model.name);
-  } catch (error) {
+    // Robustly handle strings or objects (Ollama versions vary)
+  return data.models.map((m: any) => {
+if (typeof m === 'string') return m;
+return m.name || m.model || 'Unknown Model';
+});
+} catch (error) {
     console.error("Failed to fetch models:", error);
     return [];
   }
@@ -264,6 +268,8 @@ export const deleteNode = async (nodeId: string) => {
     return false;
   }
 };
+
+
 
 
 

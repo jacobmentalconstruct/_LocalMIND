@@ -13,24 +13,24 @@ import {
   getUserProfile,
   resetSQLite,
   resetChroma,
-  analyzeSnippet, // [NEW] Needed for the Right-Click Isolation
+  analyzeSnippet,
 } from './services/ollamaService';
 
-// [NEW] Swap MemoryPanel for ProjectExplorer
+// Components
 import ProjectExplorer from './components/ProjectExplorer';
-import SnippetHelperModal from './components/SnippetHelperModal'; // [NEW]
-
+import SnippetHelperModal from './components/SnippetHelperModal';
+import SessionInfoPanel from './components/SessionInfoPanel';
+import SuggestionsPanel from './components/SuggestionsPanel';
 import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
 import SystemPromptControl from './components/SystemPromptControl';
 import PromptInspector from './components/PromptInspector';
 import UserPanel from './components/UserPanel';
-import { BrainCircuitIcon, CircleDotIcon, PowerIcon, PowerOffIcon } from './components/icons';
+import { BrainCircuitIcon } from './components/icons';
 
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  // [REMOVED] const [longTermMemory, setLongTermMemory] = useState<MemoryItem[]>([]); -> Handled by Explorer now
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>('checking');
   const [isLoading, setIsLoading] = useState(false);
   const [model, setModel] = useState('llama3');
@@ -53,17 +53,17 @@ const App: React.FC = () => {
   const [userName, setUserName] = useState('User');
   const [userDescription, setUserDescription] = useState('Core operator of this LocalMIND workspace.');
 
-  // [NEW] Snippet / Isolation Modal State
+  // Snippet / Isolation Modal State
   const [isSnippetOpen, setIsSnippetOpen] = useState(false);
   const [snippetContent, setSnippetContent] = useState('');
   const [snippetResult, setSnippetResult] = useState<string | null>(null);
   const [isSnippetLoading, setIsSnippetLoading] = useState(false);
 
-  // Column widths (in pixels) for the resizable layout
+  // Column widths
   const [leftColumnWidth, setLeftColumnWidth] = useState(260);
   const [rightColumnWidth, setRightColumnWidth] = useState(280);
 
-  // Drag state for column resize handles
+  // Drag state
   const dragStateRef = useRef<{
     activeHandle: 'left' | 'right' | null;
     startX: number;
@@ -138,14 +138,10 @@ const App: React.FC = () => {
   useEffect(() => {
     checkOllamaStatus();
 
-    // [UPDATED] No longer fetching flat "getMemories". The Project Explorer handles the tree.
-
-    // Load chat history
     getHistory().then((history) => {
       if (history.length > 0) setMessages(history as any);
     });
 
-    // Load user profile
     getUserProfile().then((profile) => {
       if (profile) {
         setUserProfile(profile);
@@ -223,7 +219,6 @@ Workspace: LocalMIND
   const handleWipeVector = async () => {
     if (confirm('Delete all long-term memories?')) {
       await resetChroma();
-      // setLongTermMemory([]); -> No longer managing flat state
     }
   };
 
@@ -286,36 +281,26 @@ Workspace: LocalMIND
       await handleUpdateMemory(id, content);
     } else {
       await addMemory(content);
-      // No local update needed, DB will handle it
       if (id) setProposedFacts((prev) => prev.filter((p) => p.id !== id));
     }
     setEditingMemory(null);
   };
 
   const handleSaveToMemory = (content: string) => {
-    // For now, open the refinery to create a new generic fact
     setEditingMemory({ id: 'temp_from_chat', content });
   };
 
   const handleUpdateMemory = async (id: string, newContent: string) => {
     await updateMemory(id, newContent);
-    // Refresh logic would go here if we were still using the list
   };
 
   const handleClearChat = () => {
     setMessages([]);
   };
 
-  // [NEW] Handlers for the Project Explorer
+  // Handlers for the Project Explorer
   const handleNodeSelect = (content: string) => {
-    // For now, selecting a node injects it into the system prompt control or message input?
-    // Let's copy it to the clipboard or focus it. 
-    // The user said: "Click a Memory -> It injects into the Session Context"
-    // Since Session Context UI is changing, let's just log it or maybe append to system prompt for now?
-    // Actually, let's just show it in the Inspector/Input for immediate use.
     if(confirm("Load this file content into your message input?")) {
-        // Find input box? Or just set state if we had access to input state.
-        // For simplicity in this patch, we will trigger the Inspector with this content.
         setInspectedPrompt(prev => prev + `\n\n[CONTEXT FROM FILE]:\n${content}`);
         setShowInspector(true);
     }
@@ -347,12 +332,27 @@ Workspace: LocalMIND
         className="grid gap-2 h-full min-h-0"
         style={{ gridTemplateColumns: `${leftColumnWidth}px 1fr ${rightColumnWidth}px` }}
       >
-        {/* --- LEFT COLUMN: PROJECT EXPLORER (The Vault) --- */}
+        {/* --- LEFT COLUMN: SESSION + TREE + SUGGESTIONS --- */}
         <div className="bg-gray-900 border border-gray-700 rounded-lg overflow-hidden flex flex-col relative">
           
-          <ProjectExplorer 
-            onNodeSelect={handleNodeSelect}
-            onRunIsolated={handleRunIsolated}
+          <SessionInfoPanel 
+            activeSummarizer={activeSummarizer}
+            availableSummarizers={availableSummarizers}
+            onSummarizerChange={setActiveSummarizer}
+            onWipeSQLite={handleWipeSQLite}
+            onWipeVector={handleWipeVector}
+          />
+
+          <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
+            <ProjectExplorer 
+              onNodeSelect={handleNodeSelect}
+              onRunIsolated={handleRunIsolated}
+            />
+          </div>
+
+          <SuggestionsPanel 
+            proposedItems={proposedFacts}
+            onEdit={(item) => setEditingMemory(item)}
           />
           
           {/* Resize handle */}
@@ -373,7 +373,7 @@ Workspace: LocalMIND
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300"
+                className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded focus:outline-none text-gray-300 max-w-[150px] truncate"
               >
                 {availableModels.map((m) => (
                   <option key={m} value={m}>
@@ -447,7 +447,6 @@ Workspace: LocalMIND
         />
       )}
 
-      {/* [NEW] Snippet / Isolation Modal */}
       <SnippetHelperModal
         isOpen={isSnippetOpen}
         snippet={snippetContent}

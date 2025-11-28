@@ -49,7 +49,8 @@ const MessageInput: React.FC<MessageInputProps> = ({
           onKeyDown={handleKeyDown}
           placeholder="Type your message here..."
           rows={1}
-          className="w-full p-3 pr-24 bg-gray-700 border border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+          className="w-full p-3 pr-14 bg-gray-700 border border-gray-600 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all [&::-webkit-scrollbar]:hidden"
           disabled={isLoading}
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -87,3 +88,4 @@ const MessageInput: React.FC<MessageInputProps> = ({
 };
 
 export default MessageInput;
+

@@ -64,16 +64,6 @@ onAskAboutSelection(text);
 
 return (
 <div ref={scrollRef} className="h-full overflow-y-auto p-4">
-      <div className="flex justify-end mb-2">
-        <button
-      type="button"
-      onClick={handleAskSelection}
-      className="px-2 py-1 text-[10px] rounded border border-gray-700 bg-gray-800/80 text-gray-300 hover:bg-gray-700 hover:text-white flex items-center gap-1"
-      >
-      <BrainCircuitIcon className="w-3 h-3" />
-      Ask about selection
-      </button>
-      </div>
       <div className="flex flex-col gap-6">
       {messages.length === 0 ? (
            <div className="flex flex-col items-center justify-center h-full text-gray-500">
@@ -92,4 +82,6 @@ return (
 };
 
 export default ChatPanel;
+
+
 
