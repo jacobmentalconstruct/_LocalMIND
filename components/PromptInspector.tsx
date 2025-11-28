@@ -1,71 +1,118 @@
-import React, { useRef } from 'react';
-import { SendIcon, XIcon, BotIcon } from './icons';
+import React, { useRef, useEffect } from 'react';
+import { SendIcon, XIcon, BotIcon, SparklesIcon, CheckIcon, TrashIcon } from './icons';
 
 interface PromptInspectorProps {
   promptText: string;
+  previewText: string | null;
   onPromptChange: (text: string) => void;
-  onRun: () => void;
-  onCancel: () => void;
+  onCommit: () => void;
+  onDiscard: () => void;
+  onReRun: () => void; // Manual re-run if they edit the prompt
+  onCancel: () => void; // Close inspector entirely
   model: string;
-  isBuilding: boolean; // Indicates if backend is still assembling the context
+  isBuilding: boolean;
+  isInferring: boolean;
 }
 
 const PromptInspector: React.FC<PromptInspectorProps> = ({
   promptText,
+  previewText,
   onPromptChange,
-  onRun,
+  onCommit,
+  onDiscard,
+  onReRun,
   onCancel,
   model,
   isBuilding,
+  isInferring,
 }) => {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-scroll preview when it updates
+  useEffect(() => {
+    if (previewRef.current && previewText) {
+      previewRef.current.scrollTop = previewRef.current.scrollHeight;
+    }
+  }, [previewText]);
+
+  // Visual State Logic
+  const isBusy = isBuilding || isInferring;
+  const statusColor = isBusy ? 'text-amber-400' : 'text-green-400';
+  const borderColor = isBusy ? 'border-amber-500/30' : 'border-green-500/30';
 
   return (
     <div className="flex flex-col h-full bg-gray-900 border-l border-gray-700 w-full overflow-hidden transition-all">
-      <div className="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-800">
-        <h2 className="text-lg font-bold flex items-center gap-2">
-          <BotIcon className="w-5 h-5 text-green-400" /> Prompt Inspector
+      {/* Header */}
+      <div className="p-3 border-b border-gray-700 flex justify-between items-center bg-gray-800">
+        <h2 className={`text-xs font-bold flex items-center gap-2 uppercase tracking-wider ${isBusy ? 'text-amber-400' : 'text-gray-400'}`}>
+          <BotIcon className={`w-4 h-4 ${isBusy ? 'animate-pulse' : ''}`} /> 
+          {isBuilding ? 'Orchestrating...' : isInferring ? 'Inferring...' : 'Prompt Staging'}
         </h2>
-        <div className="flex items-center gap-3">
-          {isBuilding && (
-            <span className="text-xs text-yellow-400 animate-pulse font-mono">
-              Orchestrating...
-            </span>
-          )}
-          <button onClick={onCancel} className="text-gray-400 hover:text-white">
-            <XIcon className="w-5 h-5" />
-          </button>
+        <button onClick={onCancel} className="text-gray-500 hover:text-white"><XIcon className="w-4 h-4" /></button>
+      </div>
+
+      {/* Split View Container */}
+      <div className="flex-1 flex flex-col min-h-0">
+        
+        {/* TOP: PROMPT INPUT */}
+        <div className={`relative flex-1 min-h-0 flex flex-col ${previewText ? 'h-1/2 border-b border-gray-700' : 'h-full'}`}>
+            <div className="absolute top-2 right-2 text-[10px] text-gray-600 font-mono pointer-events-none z-10">INPUT TEMPLATE</div>
+            <textarea
+                value={promptText}
+                onChange={(e) => !isBusy && onPromptChange(e.target.value)}
+                className={`w-full h-full bg-[#1e1e1e] font-mono text-xs p-4 resize-none focus:outline-none transition-colors ${statusColor} ${isBusy ? 'cursor-wait' : ''}`}
+                spellCheck={false}
+                placeholder="Orchestrated prompt will appear here..."
+                readOnly={isBusy}
+            />
         </div>
+
+        {/* BOTTOM: PREVIEW OUTPUT (Only shows if there is a preview or we are waiting for one) */}
+        {(previewText || isInferring) && (
+            <div className="flex-1 min-h-0 flex flex-col bg-gray-900/50 animate-in fade-in slide-in-from-bottom-2">
+                <div className="p-2 bg-gray-800/50 border-b border-gray-700/50 text-[10px] text-indigo-300 font-bold uppercase tracking-wider flex justify-between items-center">
+                    <span>Model Response ({model})</span>
+                    {isInferring && <span className="text-amber-400 animate-pulse">GENERATING DRAFT...</span>}
+                </div>
+                <textarea
+                    ref={previewRef}
+                    value={previewText || ''}
+                    readOnly
+                    className={`w-full h-full bg-[#151515] font-sans text-xs p-4 resize-none focus:outline-none leading-relaxed ${isInferring ? 'text-amber-500/50' : 'text-gray-300'}`}
+                    placeholder="Waiting for model..."
+                />
+            </div>
+        )}
       </div>
 
-      <div className="flex-1 relative">
-        <textarea
-          ref={textareaRef}
-          value={promptText}
-          onChange={(e) => !isBuilding && onPromptChange(e.target.value)}
-          className={`w-full h-full bg-[#1e1e1e] font-mono text-xs p-4 resize-none focus:outline-none transition-colors ${
-            isBuilding ? 'text-gray-500 cursor-wait' : 'text-green-300'
-          }`}
-          spellCheck={false}
-          readOnly={isBuilding}
-        />
-      </div>
-
-      <div className="p-4 border-t border-gray-700 bg-gray-800 flex gap-4">
+      {/* Footer / Actions */}
+      <div className={`p-3 border-t border-gray-700 bg-gray-800 flex gap-2 ${isBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+        
+        {/* DISCARD */}
         <button
-          onClick={onCancel}
-          disabled={isBuilding}
-          className="flex-1 px-4 py-2 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={onDiscard}
+          className="px-3 py-2 rounded bg-red-900/20 text-red-400 border border-red-500/30 hover:bg-red-900/40 flex items-center justify-center gap-2 text-xs font-bold transition-all"
+          title="Discard Draft"
         >
-          Cancel
+          <TrashIcon className="w-3.5 h-3.5" />
         </button>
+
+        {/* RE-RUN (If user edited prompt) */}
         <button
-          onClick={onRun}
-          disabled={isBuilding || !promptText}
-          className="flex-1 px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 flex items-center justify-center gap-2 font-bold transition-colors"
+          onClick={onReRun}
+          className="flex-1 px-3 py-2 rounded bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-600/40 flex items-center justify-center gap-2 text-xs font-bold transition-all"
         >
-          <SendIcon className="w-4 h-4" />
-          {isBuilding ? 'Building...' : 'Run Prompt'}
+          <SparklesIcon className="w-3.5 h-3.5" />
+          Re-Run
+        </button>
+
+        {/* COMMIT */}
+        <button
+        onClick={onCommit}
+        className="flex-[2] px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-500 shadow-lg hover:shadow-emerald-500/20 flex items-center justify-center gap-2 text-xs font-bold transition-all"
+        >
+        <CheckIcon className="w-3.5 h-3.5" />
+        Commit
         </button>
       </div>
     </div>

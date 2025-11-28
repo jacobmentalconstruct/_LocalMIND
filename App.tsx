@@ -32,7 +32,7 @@ import { BrainCircuitIcon } from './components/icons';
 const App: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus>('checking');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(false); // Global loading (blocks input)
   const [model, setModel] = useState('llama3');
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful assistant.');
@@ -44,11 +44,13 @@ const App: React.FC = () => {
   const [proposedFacts, setProposedFacts] = useState<MemoryItem[]>([]);
   const [editingMemory, setEditingMemory] = useState<MemoryItem | null>(null);
 
-  // Inspector State
+  // Inspector & Staging State
   const [showInspector, setShowInspector] = useState(true);
   const [isBuildingPrompt, setIsBuildingPrompt] = useState(false);
   const [inspectedPrompt, setInspectedPrompt] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
+  const [previewResponse, setPreviewResponse] = useState<string | null>(null);
+  
   const [userProfile, setUserProfile] = useState<any | null>(null);
   const [userName, setUserName] = useState('User');
   const [userDescription, setUserDescription] = useState('Core operator of this LocalMIND workspace.');
@@ -154,55 +156,37 @@ const App: React.FC = () => {
   const handleSendMessage = async (input: string) => {
     if (!input.trim() || isLoading || isBuildingPrompt) return;
 
+    // Reset staging
+    setPreviewResponse(null);
+    setPendingUserMessage(input);
+
+    // 1. Legacy Mode (Direct Fire)
     if (!showInspector) {
-      await runInference(input, null);
+      await runInference(input, null, true); // true = autoCommit
       return;
     }
 
+    // 2. Staging Mode - AUTO DRAFT
     setIsBuildingPrompt(true);
-    setPendingUserMessage(input);
-
-    const skeleton = `=== SYSTEM ===
-  ${systemPrompt}
-
-  === IDENTITY ===
-  User: ${userName}
-  Description: ${userDescription}
-Workspace: LocalMIND
-  
-  === PREVIOUS SESSION CONTEXT ===
-  (Querying Session Manager...)
-  
-  === LONG-TERM MEMORY (RAG) ===
-  (Querying Knowledge Graph...)
-
-  === RECENT HISTORY ===
-  (Fetching SQLite Logs...)
-
-  === CURRENT MESSAGE ===
-  User: ${input}
-
-  Assistant:`;
-    setInspectedPrompt(skeleton);
+    setInspectedPrompt("Building orchestration context..."); // Visual feedback
 
     const buildTimeout = window.setTimeout(() => {
       setIsBuildingPrompt(false);
-      setInspectedPrompt((prev) =>
-        prev +
-        '\n\n# WARNING: Prompt build timed out. You can retry or run without the Inspector.'
-      );
+      setInspectedPrompt((prev) => prev + '\n\n# WARNING: Prompt build timed out.');
     }, 60000);
 
     try {
+      // Step A: Build the prompt
       const data: any = await buildPrompt(model, input, systemPrompt, true, userName, userDescription);
+      
       if (data && data.final_prompt) {
         setInspectedPrompt(data.final_prompt);
+        // Step B: Auto-Run Inference (Draft Mode)
+        await runInference(input, data.final_prompt, false); 
       }
     } catch (err) {
       console.error('Error building prompt:', err);
-      setInspectedPrompt((prev) =>
-        prev + '\n\n# ERROR: Failed to build prompt. Please try again.'
-      );
+      setInspectedPrompt((prev) => prev + '\n\n# ERROR: Failed to build prompt.');
     } finally {
       window.clearTimeout(buildTimeout);
       setIsBuildingPrompt(false);
@@ -222,46 +206,60 @@ Workspace: LocalMIND
     }
   };
 
-  const runInference = async (originalInput: string, overriddenPrompt: string | null) => {
+  // Main Inference Engine
+  const runInference = async (originalInput: string, promptToRun: string | null, autoCommit: boolean) => {
     setIsLoading(true);
-    setProposedFacts([]);
-
-    if (!messages.find((m) => m.content === originalInput)) {
-      const userMessage: ChatMessage = {
-        id: Date.now().toString(),
-        role: 'user',
-        content: originalInput,
-      };
-      setMessages((prev) => [...prev, userMessage]);
-    }
-
     abortControllerRef.current = new AbortController();
-    const assistantMessageId = (Date.now() + 1).toString();
-    setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: '' }]);
+
+    let assistantMessageId = '';
 
     try {
+      // 1. Commit Mode: Update UI immediately with placeholders
+      if (autoCommit) {
+        setProposedFacts([]);
+        if (!messages.find((m) => m.content === originalInput)) {
+          const userMessage: ChatMessage = { id: Date.now().toString(), role: 'user', content: originalInput };
+          setMessages((prev) => [...prev, userMessage]);
+        }
+        assistantMessageId = (Date.now() + 1).toString();
+        setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: '' }]);
+      }
+
+      // 2. Execute Inference
       let data;
-      if (overriddenPrompt) {
-        data = await inferWithPrompt(overriddenPrompt, model, originalInput, activeSummarizer);
+      if (promptToRun) {
+        // Staging/Inspector flow
+        data = await inferWithPrompt(promptToRun, model, originalInput, activeSummarizer);
       } else {
+        // Legacy flow
         data = await sendChat(model, originalInput, systemPrompt, true, activeSummarizer);
       }
 
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId ? { ...msg, content: data.response } : msg,
-        ),
-      );
-
-      if (data.new_memory) {
-        setProposedFacts((prev) => [...prev, data.new_memory]);
+      // 3. Handle Result
+      if (autoCommit) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId ? { ...msg, content: data.response } : msg,
+          ),
+        );
+        if (data.new_memory) {
+          setProposedFacts((prev) => [...prev, data.new_memory]);
+        }
+      } else {
+        // Staging Mode: Just update preview
+        setPreviewResponse(data.response);
       }
+
     } catch (error) {
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId ? { ...msg, content: 'Error during inference.' } : msg,
-        ),
-      );
+      if (autoCommit && assistantMessageId) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId ? { ...msg, content: 'Error during inference.' } : msg,
+          ),
+        );
+      } else {
+        setPreviewResponse('Error during inference: ' + error);
+      }
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
@@ -292,6 +290,36 @@ Workspace: LocalMIND
 
   const handleUpdateMemory = async (id: string, newContent: string) => {
     await updateMemory(id, newContent);
+  };
+
+  const handleCommit = async () => {
+    if (!previewResponse || !pendingUserMessage) return;
+
+    // Manually add to Chat History UI
+    const userMessage: ChatMessage = { id: Date.now().toString(), role: 'user', content: pendingUserMessage };
+    setMessages((prev) => [...prev, userMessage]);
+
+    const botMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'assistant', content: previewResponse };
+    setMessages((prev) => [...prev, botMessage]);
+
+    // Note: Backend has already saved this interaction during inference (unless we implement the dry_run flag later).
+    
+    // Clear Staging
+    setPreviewResponse(null);
+    setPendingUserMessage('');
+    // We keep inspector open or closed? User preference. For now, keep open but ready for next.
+  };
+
+  const handleDiscard = () => {
+    setPreviewResponse(null);
+    setPendingUserMessage('');
+    setInspectedPrompt('');
+  };
+
+  const handleReRun = () => {
+    if(inspectedPrompt && pendingUserMessage) {
+        runInference(pendingUserMessage, inspectedPrompt, false);
+    }
   };
 
   const handleClearChat = () => {
@@ -421,11 +449,15 @@ Workspace: LocalMIND
           <div className="flex-1 min-h-0">
             <PromptInspector
               promptText={inspectedPrompt}
+              previewText={previewResponse}
               onPromptChange={setInspectedPrompt}
+              onCommit={handleCommit}
+              onDiscard={handleDiscard}
+              onReRun={handleReRun}
               onCancel={() => setShowInspector(false)}
-              onRun={() => runInference(pendingUserMessage, inspectedPrompt)}
               model={model}
               isBuilding={isBuildingPrompt}
+              isInferring={isLoading}
             />
           </div>
           <div

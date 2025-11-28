@@ -149,6 +149,7 @@ class InferenceRequest(BaseModel):
     model: str
     original_message: str
     summarizer_model: str | None = None
+    store: bool = True
 
 
 class SnippetRequest(BaseModel):
@@ -310,12 +311,14 @@ async def build_prompt_endpoint(request: BuildPromptRequest):
 async def infer_with_prompt_endpoint(request: InferenceRequest):
     try:
         # 1. Persist user intent
-        conn = get_db_connection()
-        conn.execute(
-            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
-            ("default_session", "user", request.original_message, request.model),
-        )
-        conn.commit()
+        if request.store:
+            conn = get_db_connection()
+            conn.execute(
+                "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+                ("default_session", "user", request.original_message, request.model),
+            )
+            conn.commit()
+            conn.close()
 
         # 2. Main inference
         messages = [{"role": "user", "content": request.final_prompt}]
@@ -323,12 +326,14 @@ async def infer_with_prompt_endpoint(request: InferenceRequest):
         assistant_response = response["message"]["content"]
 
         # 3. Persist assistant response
-        conn.execute(
-            "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
-            ("default_session", "assistant", assistant_response, request.model),
-        )
-        conn.commit()
-        conn.close()
+        if request.store:
+            conn = get_db_connection()
+            conn.execute(
+                "INSERT INTO chats (session_id, role, content, model_used) VALUES (?, ?, ?, ?)",
+                ("default_session", "assistant", assistant_response, request.model),
+            )
+            conn.commit()
+            conn.close()
 
         # 4. Sidecar summarizer
         summary_note: dict | None = None
@@ -363,7 +368,6 @@ Summary:
     except Exception as e:
         logger.error("Inference failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e)) from e
-
 
 @app.post("/analyze_snippet")
 async def analyze_snippet_endpoint(request: SnippetRequest):
@@ -587,3 +591,6 @@ if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting LocalMIND Backend on http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
