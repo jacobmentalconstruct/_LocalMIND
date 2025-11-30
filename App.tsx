@@ -15,6 +15,7 @@ import {
   resetChroma,
   analyzeSnippet,
   createNode,
+  updateNode,
   deleteNode,
 } from './services/ollamaService';
 
@@ -22,8 +23,9 @@ import {
 import ProjectExplorer from './components/ProjectExplorer';
 import SnippetHelperModal from './components/SnippetHelperModal';
 import FileSaveModal from './components/FileSaveModal';
+import FileEditorModal from './components/FileEditorModal';
 import SessionInfoPanel from './components/SessionInfoPanel';
-import NodeInspectorPanel from './components/NodeInspectorPanel'; // [NEW]
+import NodeInspectorPanel from './components/NodeInspectorPanel';
 import RefineryModal from './components/RefineryModal';
 import ChatPanel from './components/ChatPanel';
 import MessageInput from './components/MessageInput';
@@ -62,11 +64,13 @@ const App: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [activeNode, setActiveNode] = useState<{id: string, name: string, content: string} | null>(null);
   const [treeRefreshTrigger, setTreeRefreshTrigger] = useState(0);
+  const [sessionRefreshTrigger, setSessionRefreshTrigger] = useState(0);
 
-  // Snippet / Isolation Modal State
+  // Modals
   const [isSnippetOpen, setIsSnippetOpen] = useState(false);
   const [snippetContent, setSnippetContent] = useState('');
   const [isFileSaveOpen, setIsFileSaveOpen] = useState(false);
+  const [nodeToEdit, setNodeToEdit] = useState<any>(null);
   const [snippetResult, setSnippetResult] = useState<string | null>(null);
   const [isSnippetLoading, setIsSnippetLoading] = useState(false);
 
@@ -128,21 +132,24 @@ const App: React.FC = () => {
     setOllamaStatus(isOnline ? 'online' : 'offline');
   }, []);
 
-  // Fetch models and summarizers on mount
   useEffect(() => {
     getModels().then((models) => {
       if (models.length > 0) {
-        setAvailableModels(models);
-        setModel(models[0]);
+        // [FIX] Deduplicate to prevent React key warnings
+        const unique = Array.from(new Set(models)); 
+        setAvailableModels(unique);
+        setModel(unique[0]);
       }
     });
 
     getSummarizerStatus().then((status) => {
-      setAvailableSummarizers(status.available);
-      setMissingSummarizers(status.missing);
-      if (status.available.length > 0) {
-        setActiveSummarizer(status.available[0]);
-      }
+    // Deduplicate to handle models matching multiple preferences
+    const uniqueAvailable = Array.from(new Set(status.available));
+    setAvailableSummarizers(uniqueAvailable);
+    setMissingSummarizers(status.missing);
+    if (uniqueAvailable.length > 0) {
+    setActiveSummarizer(uniqueAvailable[0]);
+    }
     });
   }, []);
 
@@ -290,7 +297,16 @@ const App: React.FC = () => {
   const handleFileSaveSubmit = async (projectId: string, parentId: string | null, filename: string, content: string) => {
     await createNode(projectId, parentId, filename, 'file', content);
     setIsFileSaveOpen(false);
-    setTreeRefreshTrigger(prev => prev + 1); // FORCE REFRESH
+    setTreeRefreshTrigger(prev => prev + 1);
+  };
+
+  const handleEditNodeSubmit = async (id: string, name: string, content: string) => {
+    await updateNode(id, name, content);
+    setNodeToEdit(null);
+    setTreeRefreshTrigger(prev => prev + 1);
+    if (activeNode && activeNode.id === id) {
+        setActiveNode({ ...activeNode, name, content });
+    }
   };
   
   const handleSaveToMemory = (content: string) => {
@@ -312,6 +328,8 @@ const App: React.FC = () => {
 
     setPreviewResponse(null);
     setPendingUserMessage('');
+    
+    setTimeout(() => setSessionRefreshTrigger(prev => prev + 1), 2000);
   };
 
   const handleDiscard = () => {
@@ -385,6 +403,7 @@ const App: React.FC = () => {
             onSummarizerChange={setActiveSummarizer}
             onWipeSQLite={handleWipeSQLite}
             onWipeVector={handleWipeVector}
+            refreshTrigger={sessionRefreshTrigger}
           />
 
           <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
@@ -394,6 +413,7 @@ const App: React.FC = () => {
               onNodeClick={handleNodeClick}
               onNodeDoubleClick={handleNodeDoubleClick}
               onRunIsolated={handleRunIsolated}
+              onEditNode={setNodeToEdit}
               refreshTrigger={treeRefreshTrigger}
             />
           </div>
@@ -402,6 +422,7 @@ const App: React.FC = () => {
             selectedNode={activeNode}
             onRunIsolation={(id, content) => handleRunIsolated(id, content)}
             onDelete={handleDeleteNode}
+            onEdit={setNodeToEdit}
           />
           
           {/* Resize handle */}
@@ -517,6 +538,14 @@ const App: React.FC = () => {
       onSave={handleFileSaveSubmit}
       onClose={() => setIsFileSaveOpen(false)}
       />
+      )}
+
+      {nodeToEdit && (
+        <FileEditorModal 
+          node={nodeToEdit} 
+          onSave={handleEditNodeSubmit} 
+          onClose={() => setNodeToEdit(null)} 
+        />
       )}
       
     </div>

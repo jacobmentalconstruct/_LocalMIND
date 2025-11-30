@@ -1,14 +1,16 @@
 import React from 'react';
-import { BotIcon, TrashIcon, BookIcon } from './icons';
+import { BotIcon, TrashIcon, BookIcon, PencilIcon } from './icons'; // Ensure PencilIcon is imported
 
 interface NodeInspectorPanelProps {
-  selectedNode: { id: string; name: string; content: string } | null;
+  selectedNode: { id: string; name: string; type: string; content: string } | null;
   onRunIsolation: (id: string, content: string) => void;
   onDelete: (id: string) => void;
+  onEdit: (node: any) => void; // [NEW]
 }
 
-const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ selectedNode, onRunIsolation, onDelete }) => {
+const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ selectedNode, onRunIsolation, onDelete, onEdit }) => {
   if (!selectedNode) {
+    // ... (keep existing empty state) ...
     return (
       <div className="shrink-0 h-[20%] min-h-[120px] border-t border-gray-700 bg-gray-900 flex flex-col items-center justify-center text-xs text-gray-600 italic">
         <BookIcon className="w-6 h-6 mb-2 opacity-20" />
@@ -25,6 +27,15 @@ const NodeInspectorPanel: React.FC<NodeInspectorPanelProps> = ({ selectedNode, o
             {selectedNode.name}
         </span>
         <div className="flex gap-1">
+          {/* [NEW] Edit Button */}
+          <button 
+            onClick={() => onEdit(selectedNode)} 
+            className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors" 
+            title="Edit"
+          >
+            <PencilIcon className="w-3.5 h-3.5" />
+          </button>
+
           <button 
             onClick={() => onRunIsolation(selectedNode.id, selectedNode.content)} 
             className="p-1 text-indigo-400 hover:bg-gray-700 rounded transition-colors" 

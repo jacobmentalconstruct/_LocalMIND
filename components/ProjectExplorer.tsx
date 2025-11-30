@@ -1,21 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Project, TreeNode } from '../types';
-import { getProjects, createProject, getKnowledgeTree, createNode, deleteNode } from '../services/ollamaService';
-import { PlusIcon, TrashIcon, BookIcon, BotIcon, SquareIcon, SaveIcon } from './icons';
+import { getProjects, createProject, getKnowledgeTree, createNode, deleteNode, duplicateNode } from '../services/ollamaService';
+import { PlusIcon, TrashIcon, BookIcon, BotIcon, SquareIcon, SaveIcon, PencilIcon, CopyIcon } from './icons';
 
 interface ProjectExplorerProps {
-  onNodeClick: (node: { id: string; name: string; content: string }) => void;
+  onNodeClick: (node: { id: string; name: string; type: string; content: string }) => void;
   onNodeDoubleClick: (content: string) => void;
   onRunIsolated: (nodeId: string, content: string) => void;
+  onEditNode: (node: any) => void;
   selectedProjectId: string;
   onProjectChange: (id: string) => void;
-  refreshTrigger: number; // A prop we flip to force re-fetches
+  refreshTrigger: number;
 }
 
 const ProjectExplorer: React.FC<ProjectExplorerProps> = ({ 
     onNodeClick, 
     onNodeDoubleClick, 
     onRunIsolated,
+    onEditNode,
     selectedProjectId,
     onProjectChange,
     refreshTrigger
@@ -30,12 +32,12 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
   const [creationTarget, setCreationTarget] = useState<{parentId: string | null, type: 'folder' | 'file'} | null>(null);
   const [newNodeName, setNewNodeName] = useState('');
 
-  // 1. Load Projects on Mount
+  // Load Projects
   useEffect(() => {
     loadProjects();
   }, []);
 
-  // 2. Load Tree when Project or RefreshTrigger changes
+  // Load Tree
   useEffect(() => {
     if (selectedProjectId) {
       loadTree(selectedProjectId);
@@ -76,7 +78,7 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
       creationTarget.parentId, 
       newNodeName, 
       creationTarget.type, 
-      creationTarget.type === 'file' ? '(New Empty File)' : ''
+      creationTarget.type === 'file' ? '(New Empty Record)' : ''
     );
     
     await loadTree(selectedProjectId);
@@ -91,11 +93,16 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
     }
   };
 
+  const handleDuplicateNode = async (id: string) => {
+      await duplicateNode(id);
+      loadTree(selectedProjectId);
+  };
+
   const renderTreeNodes = (parentId: string | null, depth = 0) => {
     const children = nodes.filter(n => n.parent_id === parentId);
     
     if (children.length === 0 && depth === 0 && !parentId) {
-        return <div className="p-4 text-xs text-gray-500 italic text-center">Empty Project. Create a folder!</div>;
+        return <div className="p-4 text-xs text-gray-500 italic text-center">Empty Database. Add a Subject!</div>;
     }
 
     return children.map(node => (
@@ -105,7 +112,10 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
             ${node.type === 'folder' ? 'text-indigo-200 font-semibold' : 'text-gray-300'}
           `}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
-          onClick={() => node.type === 'file' && onNodeClick({ id: node.id, name: node.name, content: node.content || '' })}
+          onClick={() => {
+              // FIX: Now passing TYPE correctly so App.tsx knows what it is
+              onNodeClick({ id: node.id, name: node.name, type: node.type, content: node.content || '' });
+          }}
           onDoubleClick={() => node.type === 'file' && onNodeDoubleClick(node.content || '')}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -122,6 +132,7 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
             <span className="truncate">{node.name}</span>
           </div>
           
+          {/* Quick Actions on Hover (Folder only) */}
           {node.type === 'folder' && (
              <button 
                className="opacity-0 group-hover:opacity-100 hover:text-white text-gray-500"
@@ -129,7 +140,7 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
                  e.stopPropagation();
                  setCreationTarget({ parentId: node.id, type: 'file' });
                }}
-               title="New File inside"
+               title="Add Record inside"
              >
                 <PlusIcon className="w-3 h-3"/>
              </button>
@@ -144,10 +155,11 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
   return (
     <div className="flex flex-col h-full bg-gray-900 border-r border-gray-700 font-sans text-gray-300" onClick={() => setContextMenu(null)}>
       
+      {/* HEADER: DATABASE SELECTOR */}
       <div className="p-3 border-b border-gray-700 bg-gray-800/50 flex flex-col gap-2">
         <div className="flex items-center justify-between">
-           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Workspace</span>
-           <button onClick={() => setIsCreatingProject(!isCreatingProject)} className="text-gray-500 hover:text-emerald-400">
+           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Database</span>
+           <button onClick={() => setIsCreatingProject(!isCreatingProject)} className="text-gray-500 hover:text-emerald-400" title="New Database">
              <PlusIcon className="w-3.5 h-3.5" />
            </button>
         </div>
@@ -157,7 +169,7 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
              <input 
                autoFocus
                className="flex-1 bg-gray-900 border border-gray-600 rounded text-xs px-2 py-1 outline-none focus:border-emerald-500"
-               placeholder="Project Name..."
+               placeholder="Database Name..."
                value={newProjectName}
                onChange={e => setNewProjectName(e.target.value)}
                onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
@@ -170,31 +182,34 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
             value={selectedProjectId}
             onChange={(e) => onProjectChange(e.target.value)}
           >
-            {projects.length === 0 && <option value="">No Projects</option>}
+            {projects.length === 0 && <option value="">No Databases</option>}
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         )}
       </div>
 
+      {/* ACTION BAR: SUBJECT / RECORD */}
       <div className="flex items-center gap-1 p-2 bg-gray-900 border-b border-gray-800 text-[10px]">
          <button disabled={!selectedProjectId} onClick={() => setCreationTarget({ parentId: null, type: 'folder' })} className="flex items-center gap-1 px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 disabled:opacity-50">
-           <PlusIcon className="w-3 h-3"/> Folder
+           <PlusIcon className="w-3 h-3"/> Subject
          </button>
          <button disabled={!selectedProjectId} onClick={() => setCreationTarget({ parentId: null, type: 'file' })} className="flex items-center gap-1 px-2 py-1 bg-gray-800 rounded hover:bg-gray-700 disabled:opacity-50">
-           <PlusIcon className="w-3 h-3"/> File
+           <PlusIcon className="w-3 h-3"/> Record
          </button>
       </div>
 
+      {/* TREE VIEW */}
       <div className="flex-1 overflow-y-auto py-2">
          {selectedProjectId ? renderTreeNodes(null) : (
-            <div className="p-4 text-center text-xs text-gray-600">Select or create a project to begin.</div>
+            <div className="p-4 text-center text-xs text-gray-600">Select or create a Database to begin.</div>
          )}
       </div>
       
+      {/* CREATION POPUP */}
       {creationTarget && (
          <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm">
             <div className="bg-gray-800 border border-gray-600 rounded p-4 w-64 shadow-2xl">
-               <div className="text-xs font-bold uppercase text-gray-400 mb-2">New {creationTarget.type}</div>
+               <div className="text-xs font-bold uppercase text-gray-400 mb-2">New {creationTarget.type === 'folder' ? 'Subject' : 'Record'}</div>
                <input autoFocus className="w-full bg-gray-900 border border-gray-600 rounded text-sm px-2 py-1 mb-3 outline-none focus:border-emerald-500" placeholder="Name..." value={newNodeName} onChange={e => setNewNodeName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreateNode()}/>
                <div className="flex justify-end gap-2">
                   <button onClick={() => setCreationTarget(null)} className="text-xs text-gray-400 hover:text-white">Cancel</button>
@@ -204,8 +219,26 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
          </div>
       )}
 
+      {/* CONTEXT MENU */}
       {contextMenu && (
         <div className="fixed bg-gray-800 border border-gray-600 rounded shadow-xl py-1 z-50 w-48 animate-in fade-in zoom-in-95 duration-75" style={{ top: contextMenu.y, left: contextMenu.x }} onMouseLeave={() => setContextMenu(null)}>
+          <button className="w-full text-left px-3 py-2 text-xs hover:bg-gray-700 text-gray-300 flex items-center gap-2" onClick={() => {
+              const node = nodes.find(n => n.id === contextMenu.nodeId);
+              if(node) {
+                  onEditNode(node); 
+                  setContextMenu(null);
+              }
+            }}>
+            <PencilIcon className="w-3 h-3" /> Edit / Rename
+          </button>
+
+          <button className="w-full text-left px-3 py-2 text-xs hover:bg-gray-700 text-gray-300 flex items-center gap-2" onClick={() => {
+              handleDuplicateNode(contextMenu.nodeId);
+              setContextMenu(null);
+            }}>
+            <CopyIcon className="w-3 h-3" /> Duplicate
+          </button>
+
           <button className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-600 text-gray-200 flex items-center gap-2" onClick={() => {
                 const node = nodes.find(n => n.id === contextMenu.nodeId);
                 if(node && node.type === 'file' && node.content) {
@@ -215,7 +248,10 @@ const ProjectExplorer: React.FC<ProjectExplorerProps> = ({
             }}>
             <BotIcon className="w-3 h-3" /> Run Isolation
           </button>
-          <button className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/50 text-red-400 flex items-center gap-2 border-t border-gray-700" onClick={() => {
+          
+          <div className="h-px bg-gray-700 my-1"></div>
+
+          <button className="w-full text-left px-3 py-2 text-xs hover:bg-red-900/50 text-red-400 flex items-center gap-2" onClick={() => {
               handleDeleteNode(contextMenu.nodeId);
               setContextMenu(null);
             }}>

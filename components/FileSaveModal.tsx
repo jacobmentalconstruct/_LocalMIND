@@ -71,7 +71,7 @@ Date: ${new Date().toISOString()}
           {/* Location Picker */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-                <label className="block text-[10px] uppercase text-gray-500 mb-1 font-bold">Workspace</label>
+                <label className="block text-[10px] uppercase text-gray-500 mb-1 font-bold">Database</label>
                 <select 
                     className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:border-emerald-500 outline-none"
                     value={selectedProjectId}
@@ -81,8 +81,8 @@ Date: ${new Date().toISOString()}
                 </select>
             </div>
             <div>
-                <label className="block text-[10px] uppercase text-gray-500 mb-1 font-bold">Folder</label>
-                <select 
+            <label className="block text-[10px] uppercase text-gray-500 mb-1 font-bold">Subject</label>
+            <select
                     className="w-full bg-gray-900 border border-gray-700 rounded p-2 text-xs text-white focus:border-emerald-500 outline-none"
                     value={selectedFolderId}
                     onChange={(e) => setSelectedFolderId(e.target.value)}

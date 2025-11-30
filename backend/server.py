@@ -174,6 +174,94 @@ class NodeCreateRequest(BaseModel):
     type: str
     content: str | None = ""
 
+# Add this model near the top with other Pydantic models
+class NodeUpdateRequest(BaseModel):
+    name: str | None = None
+    content: str | None = None
+
+@app.post("/tree/nodes/{node_id}/duplicate")
+def duplicate_node(node_id: str):
+    """Duplicate a node (and its content/embeddings)."""
+    conn = get_db_connection()
+    try:
+        # 1. Get original node
+        original = conn.execute("SELECT * FROM knowledge_nodes WHERE id = ?", (node_id,)).fetchone()
+        if not original:
+            raise HTTPException(status_code=404, detail="Node not found")
+
+        # 2. Create copy data
+        import uuid
+        new_id = str(uuid.uuid4())
+        new_name = original["name"] + " (Copy)"
+        
+        # 3. Insert Copy
+        conn.execute(
+            "INSERT INTO knowledge_nodes (id, project_id, parent_id, name, type, content) VALUES (?, ?, ?, ?, ?, ?)",
+            (new_id, original["project_id"], original["parent_id"], new_name, original["type"], original["content"])
+        )
+        conn.commit()
+
+        # 4. Duplicate Embedding (If file)
+        if original["type"] == "file" and original["content"]:
+            try:
+                collection.add(
+                    documents=[original["content"]],
+                    metadatas=[{"node_id": new_id, "project_id": original["project_id"], "name": new_name}],
+                    ids=[new_id]
+                )
+            except Exception:
+                pass
+
+        return {"status": "duplicated", "id": new_id, "name": new_name}
+    except Exception as e:
+        logger.error(f"Error duplicating node: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.put("/tree/nodes/{node_id}")
+def update_node(node_id: str, request: NodeUpdateRequest):
+    """Rename a node or update its content."""
+    conn = get_db_connection()
+    try:
+        # 1. Update SQLite
+        updates = []
+        params = []
+        if request.name is not None:
+            updates.append("name = ?")
+            params.append(request.name)
+        if request.content is not None:
+            updates.append("content = ?")
+            params.append(request.content)
+        
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(node_id)
+
+        if updates:
+            sql = f"UPDATE knowledge_nodes SET {', '.join(updates)} WHERE id = ?"
+            conn.execute(sql, tuple(params))
+            conn.commit()
+
+        # 2. Update Chroma (If content changed and it's a file)
+        # Note: We can't easily check 'type' here without a query, but 
+        # Chroma update is safe if ID doesn't exist (it just won't update anything 
+        # or will error gently if we catch it).
+        if request.content is not None:
+            try:
+                collection.update(
+                    ids=[node_id],
+                    documents=[request.content],
+                    metadatas=[{"name": request.name}] if request.name else None
+                )
+            except Exception:
+                pass 
+
+        return {"status": "updated", "id": node_id}
+    except Exception as e:
+        logger.error(f"Error updating node: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 # --- GLOBAL EXCEPTION HANDLER ----------------------------------------------
 
